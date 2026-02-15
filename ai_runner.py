@@ -1,12 +1,7 @@
 import json
-import os
 from scheduler import generate_schedule
-from openai import OpenAI
+from ai_client import client
 
-client = OpenAI(
-    api_key=os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY"),
-    base_url=os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL"),
-)
 
 
 def ai_parse_prompt(prompt, employees, days):
@@ -61,7 +56,7 @@ if __name__ == "__main__":
     unavailable = ai_parse_prompt(prompt, employees, days)
 
     contracts = [35, 20, 35]
-    coverage_per_day = [2, 2, 3, 2, 4]
+    coverage_per_day = [2, 2, 2, 2, 2]
 
     schedule = generate_schedule(
         employees,

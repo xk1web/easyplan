@@ -8,6 +8,29 @@ def generate_schedule(
     contracts,
     coverage_per_day
 ):
+    hours_per_day = 8
+
+    # ----------------------------
+    # PRÉ-CHECK DE FAISABILITÉ
+    # ----------------------------
+
+    max_capacity = 0
+    for e in range(len(employees)):
+        max_days = contracts[e] // hours_per_day
+        max_capacity += max_days
+
+    total_required = sum(coverage_per_day)
+
+    if max_capacity < total_required:
+        return {
+            "error": "Impossible schedule",
+            "reason": f"Demanded shifts ({total_required}) exceed maximum capacity ({max_capacity})."
+        }
+
+    # ----------------------------
+    # SOLVEUR
+    # ----------------------------
+
     model = cp_model.CpModel()
 
     work = {}
@@ -15,8 +38,6 @@ def generate_schedule(
     for e in range(len(employees)):
         for d in range(len(days)):
             work[(e, d)] = model.NewBoolVar(f"work_{e}_{d}")
-
-    hours_per_day = 8
 
     # Contraintes contractuelles min / max
     for e in range(len(employees)):
@@ -30,7 +51,6 @@ def generate_schedule(
         model.Add(total_days <= max_days)
         model.Add(total_days >= min_days)
 
-    # Couverture configurable
     # Couverture variable par jour
     for d in range(len(days)):
         required = coverage_per_day[d]
@@ -38,7 +58,6 @@ def generate_schedule(
             sum(work[(e, d)] for e in range(len(employees)))
             >= required
         )
-
 
     # Indisponibilités
     for (emp_index, day_index) in unavailable:
@@ -61,4 +80,4 @@ def generate_schedule(
                     schedule[employees[e]].append(days[d])
         return schedule
     else:
-        return {"error": "No solution found"}
+        return {"error": "No solution found by solver"}
