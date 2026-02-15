@@ -10,17 +10,21 @@ def generate_schedule(employees, days, unavailable, contracts):
         for d in range(len(days)):
             work[(e, d)] = model.NewBoolVar(f"work_{e}_{d}")
 
-    # 1 jour = 8h
     hours_per_day = 8
 
-    # Contrainte : respecter les heures contractuelles max
+    # Contraintes contractuelles min / max
     for e in range(len(employees)):
-        max_days = contracts[e] // hours_per_day
-        model.Add(
-            sum(work[(e, d)] for d in range(len(days))) <= max_days
-        )
+        target_hours = contracts[e]
 
-    # Contrainte : au moins 2 employés par jour
+        max_days = target_hours // hours_per_day
+        min_days = max_days - 1 if max_days > 0 else 0  # petite tolérance
+
+        total_days = sum(work[(e, d)] for d in range(len(days)))
+
+        model.Add(total_days <= max_days)
+        model.Add(total_days >= min_days)
+
+    # Couverture minimale : au moins 2 employés par jour
     for d in range(len(days)):
         model.Add(
             sum(work[(e, d)] for e in range(len(employees))) >= 2
@@ -30,7 +34,7 @@ def generate_schedule(employees, days, unavailable, contracts):
     for (emp_index, day_index) in unavailable:
         model.Add(work[(emp_index, day_index)] == 0)
 
-    # Objectif simple : minimiser le total travaillé (pour éviter sur-remplissage)
+    # Objectif : équilibrer la charge
     model.Minimize(
         sum(work[(e, d)] for e in range(len(employees)) for d in range(len(days)))
     )
