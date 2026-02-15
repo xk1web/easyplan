@@ -1,9 +1,10 @@
 from ortools.sat.python import cp_model
 
-def generate_schedule(employees, days):
+
+def generate_schedule(employees, days, unavailable):
     model = cp_model.CpModel()
 
-    # Variable : work[e][d] = 1 si employé e travaille le jour d
+    # Variables : work[e][d] = 1 si employé e travaille le jour d
     work = {}
     for e in range(len(employees)):
         for d in range(len(days)):
@@ -17,8 +18,9 @@ def generate_schedule(employees, days):
     for d in range(len(days)):
         model.Add(sum(work[(e, d)] for e in range(len(employees))) >= 2)
 
-    # Exemple : Alice ne travaille pas mardi
-    model.Add(work[(0, 1)] == 0)
+    # Indisponibilités dynamiques
+    for (emp_index, day_index) in unavailable:
+        model.Add(work[(emp_index, day_index)] == 0)
 
     # Ancien planning simulé
     previous_schedule = {
@@ -37,6 +39,7 @@ def generate_schedule(employees, days):
             model.Add(work[(e, d)] == previous).OnlyEnforceIf(diff.Not())
             change_penalties.append(diff)
 
+    # Objectif : minimiser les changements
     model.Minimize(sum(change_penalties))
 
     solver = cp_model.CpSolver()
@@ -58,5 +61,8 @@ if __name__ == "__main__":
     employees = ["Alice", "Bob", "Charlie"]
     days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
-    result = generate_schedule(employees, days)
+    # Exemple : Alice indisponible mardi
+    unavailable = [(0, 1)]
+
+    result = generate_schedule(employees, days, unavailable)
     print(result)
