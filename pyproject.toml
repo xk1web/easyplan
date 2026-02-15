@@ -4,5 +4,6 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
+    "openai>=2.21.0",
     "ortools>=9.15.6755",
 ]
