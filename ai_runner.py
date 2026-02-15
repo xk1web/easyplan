@@ -60,9 +60,16 @@ if __name__ == "__main__":
 
     unavailable = ai_parse_prompt(prompt, employees, days)
 
-    contracts = [35, 20, 35]  # Alice 35h, Bob 20h, Charlie 35h
-    schedule = generate_schedule(employees, days, unavailable, contracts)
+    contracts = [35, 20, 35]
+    coverage_per_day = 2
 
+    schedule = generate_schedule(
+        employees,
+        days,
+        unavailable,
+        contracts,
+        coverage_per_day
+    )
 
     print("Prompt:", prompt)
     print("Unavailable parsed:", unavailable)

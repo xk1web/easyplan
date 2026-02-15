@@ -1,7 +1,13 @@
 from ortools.sat.python import cp_model
 
 
-def generate_schedule(employees, days, unavailable, contracts):
+def generate_schedule(
+    employees,
+    days,
+    unavailable,
+    contracts,
+    coverage_per_day
+):
     model = cp_model.CpModel()
 
     work = {}
@@ -17,24 +23,25 @@ def generate_schedule(employees, days, unavailable, contracts):
         target_hours = contracts[e]
 
         max_days = target_hours // hours_per_day
-        min_days = max_days - 1 if max_days > 0 else 0  # petite tolérance
+        min_days = max_days - 1 if max_days > 0 else 0
 
         total_days = sum(work[(e, d)] for d in range(len(days)))
 
         model.Add(total_days <= max_days)
         model.Add(total_days >= min_days)
 
-    # Couverture minimale : au moins 2 employés par jour
+    # Couverture configurable
     for d in range(len(days)):
         model.Add(
-            sum(work[(e, d)] for e in range(len(employees))) >= 2
+            sum(work[(e, d)] for e in range(len(employees)))
+            >= coverage_per_day
         )
 
     # Indisponibilités
     for (emp_index, day_index) in unavailable:
         model.Add(work[(emp_index, day_index)] == 0)
 
-    # Objectif : équilibrer la charge
+    # Objectif simple
     model.Minimize(
         sum(work[(e, d)] for e in range(len(employees)) for d in range(len(days)))
     )
