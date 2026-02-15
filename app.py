@@ -13,7 +13,15 @@ class RequestHandler(BaseHTTPRequestHandler):
 
             employees = data.get("employees", [])
             days = data.get("days", [])
-            unavailable = data.get("unavailable", [])
+            raw_unavailable = data.get("unavailable", [])
+            unavailable = []
+
+            for emp_name, day_name in raw_unavailable:
+                if emp_name in employees and day_name in days:
+                    emp_index = employees.index(emp_name)
+                    day_index = days.index(day_name)
+                    unavailable.append((emp_index, day_index))
+
 
             schedule = generate_schedule(employees, days, unavailable)
 
