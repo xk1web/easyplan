@@ -8,7 +8,8 @@ def generate_schedule(
     contracts,
     coverage_per_day,
     roles,
-    required_opticians_per_day
+    required_opticians_per_day,
+    preferences
 ):
     hours_per_day = 8
 
@@ -40,7 +41,7 @@ def generate_schedule(
         for d in range(len(days)):
             work[(e, d)] = model.NewBoolVar(f"work_{e}_{d}")
 
-    # Contraintes contractuelles min / max
+    # Contraintes contractuelles
     for e in range(len(employees)):
         target_hours = contracts[e]
 
@@ -52,7 +53,7 @@ def generate_schedule(
         model.Add(total_days <= max_days)
         model.Add(total_days >= min_days)
 
-    # Couverture variable par jour
+    # Couverture variable
     for d in range(len(days)):
         required = coverage_per_day[d]
         model.Add(
@@ -60,7 +61,7 @@ def generate_schedule(
             >= required
         )
 
-    # Qualification : au moins X opticiens par jour
+    # Qualification
     for d in range(len(days)):
         model.Add(
             sum(
@@ -71,13 +72,25 @@ def generate_schedule(
             >= required_opticians_per_day
         )
 
-    # Indisponibilités
+    # Indisponibilités (hard)
     for (emp_index, day_index) in unavailable:
         model.Add(work[(emp_index, day_index)] == 0)
 
-    # Objectif simple
+    # ----------------------------
+    # SOFT CONSTRAINTS (préférences)
+    # ----------------------------
+
+    penalties = []
+
+    for (emp_index, day_index) in preferences:
+        penalty = model.NewBoolVar(f"penalty_{emp_index}_{day_index}")
+        model.Add(work[(emp_index, day_index)] == 1).OnlyEnforceIf(penalty)
+        penalties.append(penalty)
+
+    # Objectif : minimiser shifts + pénalités
     model.Minimize(
         sum(work[(e, d)] for e in range(len(employees)) for d in range(len(days)))
+        + sum(penalties)
     )
 
     solver = cp_model.CpSolver()

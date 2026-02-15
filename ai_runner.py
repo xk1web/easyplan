@@ -60,6 +60,8 @@ if __name__ == "__main__":
 
     roles = ["opticien", "vendeur", "opticien"]
     required_opticians_per_day = 1
+    preferences = [(1, 4)]  # Bob préfère éviter vendredi
+
 
 
     schedule = generate_schedule(
@@ -69,8 +71,10 @@ if __name__ == "__main__":
         contracts,
         coverage_per_day,
         roles,
-        required_opticians_per_day
+        required_opticians_per_day,
+        preferences
     )
+
 
 
     print("Prompt:", prompt)
