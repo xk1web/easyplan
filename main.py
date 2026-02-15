@@ -1,57 +1,43 @@
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import json
+from ortools.sat.python import cp_model
 
+def generate_schedule():
+    model = cp_model.CpModel()
 
-class RequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-            response = {"message": "Hello from Python!", "status": "running"}
-            self.wfile.write(json.dumps(response).encode())
-        elif self.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-            response = {"status": "healthy"}
-            self.wfile.write(json.dumps(response).encode())
-        else:
-            self.send_response(404)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            response = {"error": "Not found"}
-            self.wfile.write(json.dumps(response).encode())
+    employees = ["Alice", "Bob", "Charlie"]
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
-    def do_POST(self):
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length)
-        try:
-            data = json.loads(body) if body else {}
-        except json.JSONDecodeError:
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
-            return
+    # Variable : work[e][d] = 1 si employé e travaille le jour d
+    work = {}
+    for e in range(len(employees)):
+        for d in range(len(days)):
+            work[(e, d)] = model.NewBoolVar(f"work_{e}_{d}")
 
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-        response = {"message": "Data received", "data": data}
-        self.wfile.write(json.dumps(response).encode())
+    # Contrainte : max 3 jours par employé
+    for e in range(len(employees)):
+        model.Add(sum(work[(e, d)] for d in range(len(days))) <= 3)
 
+    # Contrainte : Alice ne travaille pas mardi
+    model.Add(work[(0, 1)] == 0)
 
-def main():
-    host = "0.0.0.0"
-    port = 5000
-    server = HTTPServer((host, port), RequestHandler)
-    print(f"Server running on http://{host}:{port}")
-    server.serve_forever()
+    # Objectif simple : maximiser le nombre total de jours travaillés
+    model.Maximize(
+        sum(work[(e, d)] for e in range(len(employees)) for d in range(len(days)))
+    )
 
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+
+    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        schedule = {}
+        for e in range(len(employees)):
+            schedule[employees[e]] = []
+            for d in range(len(days)):
+                if solver.Value(work[(e, d)]) == 1:
+                    schedule[employees[e]].append(days[d])
+        return schedule
+    else:
+        return {"error": "No solution found"}
 
 if __name__ == "__main__":
-    main()
+    result = generate_schedule()
+    print(result)
