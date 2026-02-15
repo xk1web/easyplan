@@ -61,7 +61,7 @@ if __name__ == "__main__":
     unavailable = ai_parse_prompt(prompt, employees, days)
 
     contracts = [35, 20, 35]
-    coverage_per_day = 2
+    coverage_per_day = [2, 2, 3, 2, 4]
 
     schedule = generate_schedule(
         employees,

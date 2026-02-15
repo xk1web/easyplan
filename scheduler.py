@@ -31,11 +31,14 @@ def generate_schedule(
         model.Add(total_days >= min_days)
 
     # Couverture configurable
+    # Couverture variable par jour
     for d in range(len(days)):
+        required = coverage_per_day[d]
         model.Add(
             sum(work[(e, d)] for e in range(len(employees)))
-            >= coverage_per_day
+            >= required
         )
+
 
     # Indisponibilités
     for (emp_index, day_index) in unavailable:
