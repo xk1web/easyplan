@@ -14,7 +14,8 @@ def generate_schedule():
 
     # Contrainte : max 3 jours par employé
     for e in range(len(employees)):
-        model.Add(sum(work[(e, d)] for d in range(len(days))) <= 3)
+        model.Add(sum(work[(e, d)] for d in range(len(days))) <= 4)
+
     # Contrainte : au moins 2 employés par jour
     for d in range(len(days)):
         model.Add(
