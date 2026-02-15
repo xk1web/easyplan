@@ -58,13 +58,20 @@ if __name__ == "__main__":
     contracts = [35, 20, 35]
     coverage_per_day = [2, 2, 2, 2, 2]
 
+    roles = ["opticien", "vendeur", "opticien"]
+    required_opticians_per_day = 1
+
+
     schedule = generate_schedule(
         employees,
         days,
         unavailable,
         contracts,
-        coverage_per_day
+        coverage_per_day,
+        roles,
+        required_opticians_per_day
     )
+
 
     print("Prompt:", prompt)
     print("Unavailable parsed:", unavailable)

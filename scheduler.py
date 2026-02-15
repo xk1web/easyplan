@@ -6,12 +6,14 @@ def generate_schedule(
     days,
     unavailable,
     contracts,
-    coverage_per_day
+    coverage_per_day,
+    roles,
+    required_opticians_per_day
 ):
     hours_per_day = 8
 
     # ----------------------------
-    # PRÉ-CHECK DE FAISABILITÉ
+    # PRÉ-CHECK CAPACITÉ GLOBALE
     # ----------------------------
 
     max_capacity = 0
@@ -32,7 +34,6 @@ def generate_schedule(
     # ----------------------------
 
     model = cp_model.CpModel()
-
     work = {}
 
     for e in range(len(employees)):
@@ -57,6 +58,17 @@ def generate_schedule(
         model.Add(
             sum(work[(e, d)] for e in range(len(employees)))
             >= required
+        )
+
+    # Qualification : au moins X opticiens par jour
+    for d in range(len(days)):
+        model.Add(
+            sum(
+                work[(e, d)]
+                for e in range(len(employees))
+                if roles[e] == "opticien"
+            )
+            >= required_opticians_per_day
         )
 
     # Indisponibilités
