@@ -24,11 +24,26 @@ def generate_schedule():
 
     # Contrainte : Alice ne travaille pas mardi
     model.Add(work[(0, 1)] == 0)
+    # Ancien planning simulé (exemple)
+    previous_schedule = {
+        (0, 0): 1,  # Alice travaillait lundi
+        (1, 1): 1,  # Bob travaillait mardi
+        (2, 2): 1   # Charlie travaillait mercredi
+    }
 
-    # Objectif simple : maximiser le nombre total de jours travaillés
-    model.Maximize(
-        sum(work[(e, d)] for e in range(len(employees)) for d in range(len(days)))
-    )
+    change_penalties = []
+
+    for e in range(len(employees)):
+        for d in range(len(days)):
+            previous = previous_schedule.get((e, d), 0)
+            diff = model.NewBoolVar(f"diff_{e}_{d}")
+            model.Add(work[(e, d)] != previous).OnlyEnforceIf(diff)
+            model.Add(work[(e, d)] == previous).OnlyEnforceIf(diff.Not())
+            change_penalties.append(diff)
+
+    # Nouveau objectif : minimiser les changements
+    model.Minimize(sum(change_penalties))
+
 
     solver = cp_model.CpSolver()
     status = solver.Solve(model)
