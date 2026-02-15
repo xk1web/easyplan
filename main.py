@@ -1,10 +1,7 @@
 from ortools.sat.python import cp_model
 
-def generate_schedule():
+def generate_schedule(employees, days):
     model = cp_model.CpModel()
-
-    employees = ["Alice", "Bob", "Charlie"]
-    days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
     # Variable : work[e][d] = 1 si employé e travaille le jour d
     work = {}
@@ -12,23 +9,22 @@ def generate_schedule():
         for d in range(len(days)):
             work[(e, d)] = model.NewBoolVar(f"work_{e}_{d}")
 
-    # Contrainte : max 3 jours par employé
+    # Contrainte : max 4 jours par employé
     for e in range(len(employees)):
         model.Add(sum(work[(e, d)] for d in range(len(days))) <= 4)
 
     # Contrainte : au moins 2 employés par jour
     for d in range(len(days)):
-        model.Add(
-            sum(work[(e, d)] for e in range(len(employees))) >= 2
-        )
+        model.Add(sum(work[(e, d)] for e in range(len(employees))) >= 2)
 
-    # Contrainte : Alice ne travaille pas mardi
+    # Exemple : Alice ne travaille pas mardi
     model.Add(work[(0, 1)] == 0)
-    # Ancien planning simulé (exemple)
+
+    # Ancien planning simulé
     previous_schedule = {
-        (0, 0): 1,  # Alice travaillait lundi
-        (1, 1): 1,  # Bob travaillait mardi
-        (2, 2): 1   # Charlie travaillait mercredi
+        (0, 0): 1,
+        (1, 1): 1,
+        (2, 2): 1
     }
 
     change_penalties = []
@@ -41,9 +37,7 @@ def generate_schedule():
             model.Add(work[(e, d)] == previous).OnlyEnforceIf(diff.Not())
             change_penalties.append(diff)
 
-    # Nouveau objectif : minimiser les changements
     model.Minimize(sum(change_penalties))
-
 
     solver = cp_model.CpSolver()
     status = solver.Solve(model)
@@ -59,6 +53,10 @@ def generate_schedule():
     else:
         return {"error": "No solution found"}
 
+
 if __name__ == "__main__":
-    result = generate_schedule()
+    employees = ["Alice", "Bob", "Charlie"]
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+
+    result = generate_schedule(employees, days)
     print(result)
