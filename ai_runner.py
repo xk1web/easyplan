@@ -1,8 +1,7 @@
 import json
+import os
 from scheduler import generate_schedule
 from openai import OpenAI
-
-import os
 
 client = OpenAI(
     api_key=os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY"),
@@ -61,7 +60,9 @@ if __name__ == "__main__":
 
     unavailable = ai_parse_prompt(prompt, employees, days)
 
-    schedule = generate_schedule(employees, days, unavailable)
+    contracts = [35, 20, 35]  # Alice 35h, Bob 20h, Charlie 35h
+    schedule = generate_schedule(employees, days, unavailable, contracts)
+
 
     print("Prompt:", prompt)
     print("Unavailable parsed:", unavailable)

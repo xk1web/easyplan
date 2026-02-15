@@ -1,46 +1,39 @@
 from ortools.sat.python import cp_model
 
 
-def generate_schedule(employees, days, unavailable):
+def generate_schedule(employees, days, unavailable, contracts):
     model = cp_model.CpModel()
 
-    # Variables : work[e][d] = 1 si employé e travaille le jour d
     work = {}
+
     for e in range(len(employees)):
         for d in range(len(days)):
             work[(e, d)] = model.NewBoolVar(f"work_{e}_{d}")
 
-    # Contrainte : max 4 jours par employé
+    # 1 jour = 8h
+    hours_per_day = 8
+
+    # Contrainte : respecter les heures contractuelles max
     for e in range(len(employees)):
-        model.Add(sum(work[(e, d)] for d in range(len(days))) <= 4)
+        max_days = contracts[e] // hours_per_day
+        model.Add(
+            sum(work[(e, d)] for d in range(len(days))) <= max_days
+        )
 
     # Contrainte : au moins 2 employés par jour
     for d in range(len(days)):
-        model.Add(sum(work[(e, d)] for e in range(len(employees))) >= 2)
+        model.Add(
+            sum(work[(e, d)] for e in range(len(employees))) >= 2
+        )
 
-    # Indisponibilités dynamiques
+    # Indisponibilités
     for (emp_index, day_index) in unavailable:
         model.Add(work[(emp_index, day_index)] == 0)
 
-    # Ancien planning simulé
-    previous_schedule = {
-        (0, 0): 1,
-        (1, 1): 1,
-        (2, 2): 1
-    }
-
-    change_penalties = []
-
-    for e in range(len(employees)):
-        for d in range(len(days)):
-            previous = previous_schedule.get((e, d), 0)
-            diff = model.NewBoolVar(f"diff_{e}_{d}")
-            model.Add(work[(e, d)] != previous).OnlyEnforceIf(diff)
-            model.Add(work[(e, d)] == previous).OnlyEnforceIf(diff.Not())
-            change_penalties.append(diff)
-
-    # Objectif : minimiser les changements
-    model.Minimize(sum(change_penalties))
+    # Objectif simple : minimiser le total travaillé (pour éviter sur-remplissage)
+    model.Minimize(
+        sum(work[(e, d)] for e in range(len(employees)) for d in range(len(days)))
+    )
 
     solver = cp_model.CpSolver()
     status = solver.Solve(model)
@@ -55,14 +48,3 @@ def generate_schedule(employees, days, unavailable):
         return schedule
     else:
         return {"error": "No solution found"}
-
-
-if __name__ == "__main__":
-    employees = ["Alice", "Bob", "Charlie"]
-    days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-
-    # Exemple : Alice indisponible mardi
-    unavailable = [(0, 1), (1, 3)]
-
-    result = generate_schedule(employees, days, unavailable)
-    print(result)
