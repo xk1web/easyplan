@@ -1,51 +1,63 @@
 import json
-from openai import OpenAI
 from scheduler import generate_schedule
+from openai import OpenAI
 
-client = OpenAI()
+import os
+
+client = OpenAI(
+    api_key=os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY"),
+    base_url=os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL"),
+)
 
 
 def ai_parse_prompt(prompt, employees, days):
-    system_message = (
-        "You are a scheduling assistant. Given a user prompt, extract which employees "
-        "are unavailable on which days. Return a JSON array of objects with 'employee' "
-        "and 'day' keys. Only use employees and days from the provided lists.\n\n"
-        f"Employees: {json.dumps(employees)}\n"
-        f"Days: {json.dumps(days)}\n\n"
-        "Example output: [{\"employee\": \"Alice\", \"day\": \"Fri\"}]\n"
-        "If no unavailability is mentioned, return an empty array: []"
-    )
+    system_message = f"""
+You are a scheduling assistant.
+
+Extract employee unavailability from the user prompt.
+
+Return STRICT JSON in this format:
+{{
+  "unavailable": [["EmployeeName", "Day"]]
+}}
+
+Only include names from this list:
+Employees: {employees}
+Days: {days}
+
+If nothing is found, return:
+{{ "unavailable": [] }}
+
+Do NOT include any text outside JSON.
+"""
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_message},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": prompt}
         ],
-        temperature=0,
+        response_format={"type": "json_object"}
     )
 
-    content = response.choices[0].message.content.strip()
-    if content.startswith("```"):
-        content = content.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    result = json.loads(response.choices[0].message.content)
 
-    parsed = json.loads(content)
+    unavailable_pairs = []
 
-    unavailable = []
-    for entry in parsed:
-        emp = entry["employee"]
-        day = entry["day"]
-        if emp in employees and day in days:
-            unavailable.append((employees.index(emp), days.index(day)))
+    for emp_name, day_name in result.get("unavailable", []):
+        if emp_name in employees and day_name in days:
+            emp_index = employees.index(emp_name)
+            day_index = days.index(day_name)
+            unavailable_pairs.append((emp_index, day_index))
 
-    return unavailable
+    return unavailable_pairs
 
 
 if __name__ == "__main__":
     employees = ["Alice", "Bob", "Charlie"]
     days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
-    prompt = "Alice ne travaille pas Fri et Bob ne travaille pas Tue"
+    prompt = "Alice est en congé vendredi et Bob ne travaille pas mardi"
 
     unavailable = ai_parse_prompt(prompt, employees, days)
 
