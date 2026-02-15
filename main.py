@@ -62,7 +62,7 @@ if __name__ == "__main__":
     days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
     # Exemple : Alice indisponible mardi
-    unavailable = [(0, 1)]
+    unavailable = [(0, 1), (1, 3)]
 
     result = generate_schedule(employees, days, unavailable)
     print(result)
