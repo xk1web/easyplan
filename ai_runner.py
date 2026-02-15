@@ -2,18 +2,13 @@ from scheduler import generate_schedule
 
 
 def parse_prompt(prompt, employees, days):
-    """
-    Version simple : détecte des phrases du type
-    'Alice ne travaille pas Fri'
-    """
     unavailable = []
-
-    words = prompt.split()
+    prompt_lower = prompt.lower()
 
     for emp in employees:
-        if emp in words:
+        if emp.lower() in prompt_lower:
             for day in days:
-                if day in words:
+                if day.lower() in prompt_lower:
                     emp_index = employees.index(emp)
                     day_index = days.index(day)
                     unavailable.append((emp_index, day_index))
@@ -25,11 +20,12 @@ if __name__ == "__main__":
     employees = ["Alice", "Bob", "Charlie"]
     days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
-    prompt = "Alice ne travaille pas Fri"
+    prompt = "Alice ne travaille pas Fri et Bob ne travaille pas Tue"
 
     unavailable = parse_prompt(prompt, employees, days)
 
     schedule = generate_schedule(employees, days, unavailable)
 
     print("Prompt:", prompt)
+    print("Unavailable parsed:", unavailable)
     print("Schedule:", schedule)
