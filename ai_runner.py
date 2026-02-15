@@ -3,15 +3,28 @@ from scheduler import generate_schedule
 
 def parse_prompt(prompt, employees, days):
     unavailable = []
-    prompt_lower = prompt.lower()
 
-    for emp in employees:
-        if emp.lower() in prompt_lower:
-            for day in days:
-                if day.lower() in prompt_lower:
-                    emp_index = employees.index(emp)
-                    day_index = days.index(day)
-                    unavailable.append((emp_index, day_index))
+    # Séparer les phrases par "et"
+    parts = prompt.split("et")
+
+    for part in parts:
+        part_lower = part.lower()
+
+        found_employee = None
+        found_day = None
+
+        for emp in employees:
+            if emp.lower() in part_lower:
+                found_employee = emp
+
+        for day in days:
+            if day.lower() in part_lower:
+                found_day = day
+
+        if found_employee and found_day:
+            emp_index = employees.index(found_employee)
+            day_index = days.index(found_day)
+            unavailable.append((emp_index, day_index))
 
     return unavailable
 
