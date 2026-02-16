@@ -3,24 +3,35 @@ from scheduler import generate_schedule
 from ai_client import client
 
 
-
 def ai_parse_prompt(prompt, employees, days):
     system_message = f"""
 You are a scheduling assistant.
 
-Extract employee unavailability from the user prompt.
+Extract TWO types of information from the user prompt:
+
+1) Hard unavailability (employee absolutely not working)
+2) Soft preferences (employee prefers to avoid a day)
 
 Return STRICT JSON in this format:
+
 {{
-  "unavailable": [["EmployeeName", "Day"]]
+  "unavailable": [["EmployeeName", "Day"]],
+  "preferences": [
+      {{"employee": "EmployeeName", "day": "Day", "weight": 5}}
+  ]
 }}
 
-Only include names from this list:
-Employees: {employees}
-Days: {days}
+Only use these employees:
+{employees}
+
+Only use these days:
+{days}
 
 If nothing is found, return:
-{{ "unavailable": [] }}
+{{
+  "unavailable": [],
+  "preferences": []
+}}
 
 Do NOT include any text outside JSON.
 """
@@ -37,34 +48,41 @@ Do NOT include any text outside JSON.
     result = json.loads(response.choices[0].message.content)
 
     unavailable_pairs = []
+    preference_tuples = []
 
+    # Hard constraints
     for emp_name, day_name in result.get("unavailable", []):
         if emp_name in employees and day_name in days:
             emp_index = employees.index(emp_name)
             day_index = days.index(day_name)
             unavailable_pairs.append((emp_index, day_index))
 
-    return unavailable_pairs
+    # Soft constraints
+    for pref in result.get("preferences", []):
+        emp_name = pref.get("employee")
+        day_name = pref.get("day")
+        weight = pref.get("weight", 1)
+
+        if emp_name in employees and day_name in days:
+            emp_index = employees.index(emp_name)
+            day_index = days.index(day_name)
+            preference_tuples.append((emp_index, day_index, weight))
+
+    return unavailable_pairs, preference_tuples
 
 
 if __name__ == "__main__":
     employees = ["Alice", "Bob", "Charlie"]
     days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
-    prompt = prompt = "Bob ne travaille pas mardi"
+    prompt = "Alice est absente vendredi et Bob préfère éviter vendredi"
 
-
-    unavailable = ai_parse_prompt(prompt, employees, days)
+    unavailable, preferences = ai_parse_prompt(prompt, employees, days)
 
     contracts = [35, 20, 35]
     coverage_per_day = [2, 2, 2, 2, 2]
-
     roles = ["opticien", "vendeur", "opticien"]
     required_opticians_per_day = 1
-    preferences = [(1, 4, 5)]
-  # Bob préfère éviter vendredi
-
-
 
     schedule = generate_schedule(
         employees,
@@ -77,8 +95,7 @@ if __name__ == "__main__":
         preferences
     )
 
-
-
     print("Prompt:", prompt)
     print("Unavailable parsed:", unavailable)
+    print("Preferences parsed:", preferences)
     print("Schedule:", schedule)
