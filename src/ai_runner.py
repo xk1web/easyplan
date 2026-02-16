@@ -79,7 +79,7 @@ if __name__ == "__main__":
 
     unavailable, preferences = ai_parse_prompt(prompt, employees, days)
 
-    contracts = [35, 20, 35]
+    contracts = [40, 20, 40]
     coverage_per_day = [2, 2, 2, 2, 2]
     roles = ["opticien", "vendeur", "opticien"]
     required_opticians_per_day = 1
