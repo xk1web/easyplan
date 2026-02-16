@@ -75,7 +75,7 @@ if __name__ == "__main__":
     employees = ["Alice", "Bob", "Charlie"]
     days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
-    prompt = "Alice est absente vendredi et Bob préfère éviter vendredi"
+    prompt = "Bob préfère éviter vendredi"
 
     unavailable, preferences = ai_parse_prompt(prompt, employees, days)
 
