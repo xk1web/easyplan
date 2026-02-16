@@ -82,10 +82,10 @@ def generate_schedule(
 
     penalties = []
 
-    for (emp_index, day_index) in preferences:
+    for (emp_index, day_index, weight) in preferences:
         penalty = model.NewBoolVar(f"penalty_{emp_index}_{day_index}")
         model.Add(work[(emp_index, day_index)] == 1).OnlyEnforceIf(penalty)
-        penalties.append(penalty)
+        penalties.append(penalty * weight)
 
     # Objectif : minimiser shifts + pénalités
     model.Minimize(

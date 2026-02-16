@@ -60,7 +60,8 @@ if __name__ == "__main__":
 
     roles = ["opticien", "vendeur", "opticien"]
     required_opticians_per_day = 1
-    preferences = [(1, 4)]  # Bob préfère éviter vendredi
+    preferences = [(1, 4, 5)]
+  # Bob préfère éviter vendredi
 
 
 
