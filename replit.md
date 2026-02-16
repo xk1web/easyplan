@@ -4,17 +4,15 @@
 A simple Python backend HTTP server using only the standard library (`http.server`). No external frameworks.
 
 ## Project Architecture
-- `main.py` — The entire application. Runs an HTTP server on port 5000.
-
-## Endpoints
-- `GET /` — Returns a JSON greeting message.
-- `GET /health` — Returns a health check response.
-- `POST /` — Accepts JSON data and echoes it back.
-- Any other path returns a 404 JSON error.
+- `src/` — Source code directory.
+- `src/app.py` — The HTTP server for schedule generation.
+- `src/scheduler.py` — The scheduling engine using Google OR-Tools.
+- `src/ai_runner.py` — Script to demonstrate AI parsing and scheduling.
+- `src/ai_client.py` — OpenAI client configuration.
 
 ## Running
-```
-python main.py
+```bash
+python src/ai_runner.py
 ```
 
 ## Recent Changes
