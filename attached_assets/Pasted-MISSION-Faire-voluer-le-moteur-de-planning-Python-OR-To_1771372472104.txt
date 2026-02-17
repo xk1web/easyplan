@@ -1,0 +1,94 @@
+MISSION
+Faire évoluer le moteur de planning Python + OR-Tools (CP-SAT) vers une version métier robuste et extensible.
+Objectifs :
+Corriger définitivement le calcul et l’affichage des heures.
+Réintroduire proprement hard + soft constraints.
+Respecter la convention collective de l’optique fournie.
+Maintenir une architecture modulaire.
+Conserver la validation préalable de faisabilité.
+Construire un système adaptable magasin par magasin.
+Ne pas faire de refactor global non nécessaire.
+ÉTAPE 1 — CORRECTION CALCUL DES HEURES (PRIORITÉ ABSOLUE)
+Problème actuel :
+Les horaires affichés ne correspondent pas aux durées réelles.
+Actions :
+Vérifier que chaque créneau possède une durée exacte (en heures réelles).
+S’assurer que :
+durée = heure_fin - heure_début
+Si créneaux discrets :
+total_heures = somme(X[e][d][s] * durée_créneau[s])
+Corriger la reconstruction des plages contiguës à l’affichage.
+Vérifier cohérence :
+durée affichée == durée réellement comptabilisée dans le modèle.
+Ajouter un test automatique vérifiant cette cohérence.
+Ne rien modifier d’autre tant que cette étape n’est pas validée.
+ÉTAPE 2 — STRUCTURATION HARD VS SOFT CONSTRAINTS
+Créer deux modules distincts :
+hard_constraints.py
+soft_constraints.py
+Hard constraints obligatoires :
+Couverture minimale par créneau.
+Pas de double affectation simultanée.
+Respect heures hebdomadaires MAX contrat.
+Respect repos légal (minimum 11h entre journées si applicable).
+Respect durée maximale journalière légale si applicable.
+Soft constraints (pondérées) :
+Équilibrage des heures.
+Répartition équitable des samedis.
+Respect préférences employé.
+Lissage amplitude journalière.
+Ne pas mélanger hard et soft.
+ÉTAPE 3 — OBJECTIF D’OPTIMISATION
+Implémenter une fonction objectif pondérée :
+Minimiser :
+écart heures cible
+déséquilibre distribution
+pénalités préférences non respectées
+Permettre pondérations paramétrables.
+Ne pas coder en dur.
+ÉTAPE 4 — CURSEURS DYNAMIQUES
+Créer une structure de configuration :
+config.py
+Inclure :
+activation/désactivation de certaines hard constraints (si autorisé)
+poids des soft constraints
+niveau d’équilibrage
+seuil tolérance
+Permettre adaptation magasin par magasin via fichier JSON.
+Ne pas implémenter d’interface graphique.
+ÉTAPE 5 — GESTION ABSENCES
+Permettre :
+marquer employé indisponible sur certains créneaux
+transformer indisponibilité en hard constraint
+ÉTAPE 6 — VALIDATION LÉGALE
+Implémenter vérifications supplémentaires :
+total heures <= contrat
+respect repos minimal entre journées
+respect max jours consécutifs
+respect amplitude max
+Si violation :
+lever erreur claire.
+ÉTAPE 7 — ARCHITECTURE FINALE ATTENDUE
+validation.py
+model_builder.py
+hard_constraints.py
+soft_constraints.py
+solver.py
+config.py
+tests/
+Code modulaire, commenté, sans duplication.
+CRITÈRES DE RÉUSSITE
+✔ Heures affichées correctes
+✔ Heures hebdomadaires respectées
+✔ Couverture minimale respectée
+✔ Pas de double shift
+✔ Respect légal convention optique
+✔ Équilibrage fonctionnel
+✔ Pondérations dynamiques
+✔ Gestion absences
+✔ Modèle adaptable magasin
+INTERDICTIONS
+Ne pas supprimer la validation globale.
+Ne pas modifier l’API externe existante.
+Ne pas réécrire tout le projet.
+Ne pas ajouter dépendances externes.
