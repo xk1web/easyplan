@@ -1,0 +1,77 @@
+MISSION
+Stabiliser le moteur de génération de planning (Python + OR-Tools CP-SAT) en construisant une V1 minimale strictement faisable.
+Ne pas ajouter de nouvelles fonctionnalités.
+Ne pas optimiser.
+Objectif unique : garantir la faisabilité mathématique.
+RÈGLES STRICTES
+Ne pas modifier l’API d’entrée existante.
+Ne pas modifier la structure des données externes.
+Ne pas toucher à l’UI.
+Ne pas ajouter de nouvelles dépendances.
+Utiliser OR-Tools déjà installé.
+Ne pas implémenter de soft constraints.
+Ne pas implémenter de système de relâchement.
+Travailler uniquement sur le backend Python.
+ÉTAPE 1 — ANALYSE DU PROJET
+Identifier tous les fichiers liés au moteur de planning.
+Lister les contraintes actuellement implémentées.
+Identifier les parties V2/V3 (relâchements, soft constraints, pénalités).
+Ne rien modifier à cette étape.
+Produire un résumé technique court dans la console.
+ARRÊTER après cette étape.
+ÉTAPE 2 — CRÉATION COUCHE VALIDATION
+Créer un fichier : validation.py
+Implémenter une fonction :
+validate_global_feasibility(employees, shifts)
+Calculer :
+A = somme totale des heures contractuelles
+B = somme totale des heures nécessaires pour couvrir les créneaux minimaux
+Si A < B :
+lever une exception explicite :
+ValueError("Impossible structurellement : heures disponibles insuffisantes.")
+Ne rien modifier d’autre.
+Ajouter un test simple qui valide ce comportement.
+ARRÊTER après validation réussie.
+ÉTAPE 3 — CRÉER V1 MINIMALE
+Créer model_builder_v1.py
+Construire un modèle CP-SAT avec uniquement :
+Variables :
+X[e][d][s] booléen
+Hard constraints uniquement :
+Couverture minimale par créneau
+Un employé ne peut pas être assigné à deux créneaux simultanés
+Somme heures employé <= heures contractuelles
+Aucune autre contrainte.
+Ne pas implémenter d’objectif d’optimisation.
+ARRÊTER après génération réussie d’un planning faisable sur un cas simple.
+ÉTAPE 4 — INTÉGRATION
+Modifier uniquement le point d’entrée principal :
+main.py
+Pipeline obligatoire :
+Appeler validate_global_feasibility
+Si valide → construire modèle V1
+Lancer solveur
+Retourner planning
+Supprimer toute logique :
+V2
+V3
+relâchement progressif
+soft penalties
+Ne pas supprimer d’autres modules sans justification explicite.
+ÉTAPE 5 — TESTS OBLIGATOIRES
+Créer 3 tests automatisés :
+Test 1 : Cas faisable simple → doit générer planning
+Test 2 : Cas impossible (A < B) → doit échouer AVANT solveur
+Test 3 : Cas limite (A == B) → doit fonctionner
+Les tests doivent s’exécuter sans erreur.
+CRITÈRES DE RÉUSSITE
+✔ Le moteur génère toujours un planning si mathématiquement possible
+✔ Il échoue proprement sinon
+✔ Aucun relâchement automatique
+✔ Aucun soft constraint
+✔ Code clair et modulaire
+INTERDICTION
+Ne pas “améliorer” l’architecture.
+Ne pas ajouter de logique avancée.
+Ne pas modifier le modèle métier existant.
+Objectif = stabilité minimale.
