@@ -529,6 +529,64 @@ def test_monthly_planning_10_employees():
           f"status={m['solver_status']})")
 
 
+def test_contract_driven_planning():
+    employees = ["Emp0", "Emp1", "Emp2", "Emp3", "Emp4", "Emp5"]
+    days = [f"J{i}" for i in range(30)]
+    contracts = [35, 39, 35, 39, 35, 39]
+    config = {
+        "schedule": {
+            "start_time_minutes": 9 * 60 + 30,
+            "end_time_minutes": 19 * 60 + 30,
+            "slot_minutes": 30,
+            "min_staff_per_slot": 2
+        },
+        "hard_constraints": {
+            "max_weekly_hours": True,
+            "max_days_per_week": 6,
+            "max_daily_minutes": 600,
+            "rest_between_days_minutes": 660,
+            "require_qualified_optician": False
+        },
+        "soft_weights": {
+            "hours_balancing": 0,
+            "saturday_fairness": 0,
+            "contiguity": 0,
+            "contract_target": 50
+        },
+        "solver": {"max_time_seconds": 60},
+        "fast_solve": False
+    }
+
+    t0 = time.time()
+    result = build_and_solve_v1(employees, days, contracts, config)
+    elapsed = time.time() - t0
+    assert "error" not in result, f"Solveur échoué: {result.get('error')}"
+    _verify_hours_coherence(result)
+
+    tolerance_slots = 2
+    for i, emp in enumerate(employees):
+        total_hours = result["schedule"][emp]["total_hours"]
+        target_hours = contracts[i] * 30 / 7.0
+        slot_minutes = 30
+        tolerance_hours = tolerance_slots * slot_minutes / 60.0
+        assert total_hours >= target_hours - tolerance_hours, (
+            f"{emp} (contrat {contracts[i]}h/sem): {total_hours:.1f}h < "
+            f"cible {target_hours:.1f}h - tolérance {tolerance_hours}h"
+        )
+
+    m = result["metrics"]
+    print(f"TEST 23 OK : contract-driven planning — 6 emp × 30 jours, "
+          f"slot 30min, min_staff=2")
+    print(f"  Solve time: {elapsed:.2f}s, status={m['solver_status']}, "
+          f"gap={m['gap_percent']}%")
+    for i, emp in enumerate(employees):
+        total = result["schedule"][emp]["total_hours"]
+        target = contracts[i] * 30 / 7.0
+        print(f"  {emp}: contrat={contracts[i]}h/sem, "
+              f"cible={target:.1f}h, réel={total:.1f}h, "
+              f"delta={total - target:+.1f}h")
+
+
 if __name__ == "__main__":
     passed = 0
     failed = 0
@@ -556,6 +614,7 @@ if __name__ == "__main__":
         test_previous_month_stats,
         test_performance_warnings,
         test_monthly_planning_10_employees,
+        test_contract_driven_planning,
     ]:
         try:
             test_fn()
