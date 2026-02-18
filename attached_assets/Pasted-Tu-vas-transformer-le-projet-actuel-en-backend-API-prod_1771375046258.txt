@@ -1,0 +1,71 @@
+Tu vas transformer le projet actuel en backend API production-ready, portable et déployable sur n’importe quelle infrastructure (Railway, Render, VPS, Docker, AWS, etc.).
+⚠️ Contraintes strictes :
+Ne touche pas à la logique interne du moteur V1.
+Ne modifies pas les contraintes existantes.
+Tu restructures uniquement l’architecture backend.
+Tu dois rendre le projet totalement indépendant de Replit.
+Aucun code hardcodé dans l’API.
+OBJECTIF FINAL
+Obtenir :
+Une API REST propre (FastAPI recommandé).
+Un endpoint POST /generate-planning
+Entrée JSON complète.
+Sortie JSON structurée.
+requirements.txt minimal.
+Dockerfile minimal.
+Projet exécutable localement avec uvicorn.
+PHASE 1 — Séparation propre
+Créer un dossier src/ si pas déjà structuré.
+S’assurer que le moteur (model_builder_v1, hard_constraints, soft_constraints, validation, config) est totalement indépendant de toute logique serveur.
+Supprimer toute dépendance à ai_runner pour l’exécution API.
+Ne rien casser.
+PHASE 2 — Création API FastAPI
+Créer api.py ou main.py avec :
+POST /generate-planning
+Body JSON attendu :
+{
+  "employees": ["Alice", "Bob"],
+  "contracts": [35, 39],
+  "roles": ["opticien", "vendeur"],
+  "days": ["Lun", "Mar", "Mer"],
+  "unavailabilities": [],
+  "config": { ... }
+}
+Le endpoint doit :
+Charger config.
+Valider.
+Appeler build_and_solve_v1.
+Retourner :
+{
+  "status": "optimal" | "feasible" | "infeasible",
+  "schedule": {...},
+  "solver_time": X
+}
+Gérer toutes les erreurs via HTTPException.
+PHASE 3 — requirements.txt
+Créer un fichier minimal :
+fastapi
+uvicorn
+ortools
+Aucune dépendance inutile.
+PHASE 4 — Dockerfile minimal
+Créer un Dockerfile :
+Image python:3.11-slim
+Copier projet
+Installer requirements
+Exposer 8000
+Lancer uvicorn
+Ne pas ajouter de complexité inutile.
+PHASE 5 — Test local
+Fournir instructions exactes :
+pip install -r requirements.txt
+uvicorn main:app --reload
+Fournir exemple curl pour test.
+PHASE 6 — Rapport final
+Fournir :
+Structure finale du projet.
+Liste des fichiers.
+Confirmation qu’aucune dépendance Replit n’existe.
+Instructions déploiement Railway / Render.
+Taille approximative du conteneur Docker.
+Points d’amélioration possibles (sans les implémenter).
