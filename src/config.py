@@ -11,8 +11,10 @@ DEFAULT_CONFIG = {
     },
     "hard_constraints": {
         "max_weekly_hours": True,
+        "max_days_per_week": 6,
         "max_daily_minutes": 600,
         "rest_between_days_minutes": 660,
+        "weekly_rest_minutes": 2100,
         "require_qualified_optician": True
     },
     "soft_weights": {
@@ -22,7 +24,9 @@ DEFAULT_CONFIG = {
     },
     "solver": {
         "max_time_seconds": 30
-    }
+    },
+    "long_term_equity_weight": 0.3,
+    "fast_solve": False
 }
 
 

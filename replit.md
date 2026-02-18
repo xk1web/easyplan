@@ -1,26 +1,27 @@
-# Planning Engine — API REST Production
+# Planning Engine — API REST Production V2
 
 ## Overview
-API REST de génération de planning (Python + FastAPI + OR-Tools CP-SAT) pour magasins d'optique.
+API REST de génération de planning mensuel (Python + FastAPI + OR-Tools CP-SAT) pour magasins d'optique.
 Convention collective optique-lunetterie (IDCC 1431).
+Supporte 1 mois complet (28-31 jours), structuration hebdomadaire, équité mensuelle, injection statistiques mois précédent.
 Portable et déployable sur n'importe quelle infrastructure (Railway, Render, VPS, Docker, AWS).
 
 ## Project Architecture
 ```
 .
-├── main.py                      — API FastAPI (point d'entrée)
+├── main.py                      — API FastAPI v2 (point d'entrée)
 ├── requirements.txt             — Dépendances minimales
 ├── Dockerfile                   — Image Docker production
 ├── src/
 │   ├── __init__.py              — Package Python
-│   ├── model_builder_v1.py      — Modèle CP-SAT : variables, extraction résultats, plages contigües
-│   ├── hard_constraints.py      — Contraintes dures : couverture, max hebdo/journalier, repos 11h, opticien, absences
-│   ├── soft_constraints.py      — Contraintes souples : équilibrage heures, équité samedis, contiguité
+│   ├── model_builder_v1.py      — Modèle CP-SAT : variables, extraction résultats, métriques solveur
+│   ├── hard_constraints.py      — Contraintes dures : couverture, max hebdo/semaine, 6j max, repos 11h/35h, opticien, absences
+│   ├── soft_constraints.py      — Contraintes souples : équité mensuelle, équité samedis (+ long-terme), contiguité
 │   ├── validation.py            — Validation structurelle et légale
-│   ├── config.py                — Config JSON hiérarchique avec valeurs par défaut
-│   ├── ai_runner.py             — Script CLI standalone (pipeline validate → build → solve → display)
-│   └── tests.py                 — 15 tests automatisés
-├── scheduler.py                 — Ancien scheduler (conservé, non utilisé par V1)
+│   ├── config.py                — Config JSON hiérarchique avec valeurs par défaut (fast_solve, long_term_equity_weight)
+│   ├── ai_runner.py             — Script CLI standalone
+│   └── tests.py                 — 22 tests automatisés
+├── scheduler.py                 — Ancien scheduler (conservé, non utilisé)
 └── src/app.py                   — Ancien serveur HTTP (conservé, non utilisé)
 ```
 
@@ -29,11 +30,11 @@ Portable et déployable sur n'importe quelle infrastructure (Railway, Render, VP
 ### GET /
 Health check.
 ```json
-{"status": "ok", "engine": "planning-optique-v1"}
+{"status": "ok", "engine": "planning-optique-v2"}
 ```
 
 ### POST /generate-planning
-Génère un planning optimisé.
+Génère un planning mensuel optimisé.
 
 **Body JSON :**
 ```json
@@ -41,11 +42,17 @@ Génère un planning optimisé.
   "employees": ["Alice", "Bob", "Charlie"],
   "contracts": [35, 39, 40],
   "roles": ["opticien", "vendeur", "opticien"],
-  "days": ["Lun", "Mar", "Mer", "Jeu", "Ven"],
+  "days": ["J0", "J1", ..., "J27"],
   "unavailabilities": [],
   "config": {
-    "schedule": { "min_staff_per_slot": 1 },
-    "solver": { "max_time_seconds": 10 }
+    "schedule": { "min_staff_per_slot": 2 },
+    "solver": { "max_time_seconds": 60 },
+    "fast_solve": false,
+    "long_term_equity_weight": 0.3
+  },
+  "previous_month_stats": {
+    "total_hours": { "Alice": 152, "Bob": 160, "Charlie": 140 },
+    "saturdays_worked": { "Alice": 2, "Bob": 4, "Charlie": 1 }
   }
 }
 ```
@@ -53,35 +60,18 @@ Génère un planning optimisé.
 **Réponse :**
 ```json
 {
-  "status": "optimal | infeasible",
+  "status": "optimal",
   "schedule": { ... },
-  "solver_time": 2.5,
+  "solver_time": 6.8,
+  "metrics": {
+    "num_variables": 5900,
+    "num_constraints": 2050,
+    "solver_wall_time": 6.5,
+    "solver_status": "OPTIMAL",
+    "gap_percent": 0.0,
+    "warnings": []
+  },
   "error": null
-}
-```
-
-**Codes HTTP :**
-- 200 : Planning généré (ou infaisable avec message)
-- 422 : Validation échouée (données incohérentes, faisabilité impossible)
-- 500 : Erreur solveur interne
-
-## Schedule Output Schema (V1)
-```json
-{
-  "schedule": {
-    "EmployeeName": {
-      "total_hours": 9.5,
-      "days": {
-        "Lun": {
-          "ranges": [
-            {"start": "09:30", "end": "12:00"},
-            {"start": "14:00", "end": "18:00"}
-          ],
-          "hours": 6.5
-        }
-      }
-    }
-  }
 }
 ```
 
@@ -97,8 +87,10 @@ Génère un planning optimisé.
   },
   "hard_constraints": {
     "max_weekly_hours": true,
+    "max_days_per_week": 6,
     "max_daily_minutes": 600,
     "rest_between_days_minutes": 660,
+    "weekly_rest_minutes": 2100,
     "require_qualified_optician": true
   },
   "soft_weights": {
@@ -108,64 +100,92 @@ Génère un planning optimisé.
   },
   "solver": {
     "max_time_seconds": 30
-  }
+  },
+  "long_term_equity_weight": 0.3,
+  "fast_solve": false
 }
 ```
 
-## Hard Constraints
+## Hard Constraints (par semaine de 7 jours)
 - Couverture minimale par créneau (min_staff_per_slot)
-- Heures hebdo ≤ contrat (max_weekly_hours)
+- Heures hebdo ≤ contrat **par semaine** (max_weekly_hours) — découpage automatique en blocs de 7 jours
+- Max 6 jours travaillés **par semaine** (max_days_per_week)
 - Durée journalière ≤ 10h (max_daily_minutes, IDCC 1431)
 - Repos inter-journalier ≥ 11h (rest_between_days_minutes)
+- Repos hebdomadaire 35h consécutives (contrainte explicite sur triplets de jours + max 6j/semaine)
 - Présence opticien diplômé obligatoire (RULE 5.1)
 - Absences (journées complètes ou créneaux spécifiques)
 
 ## Soft Constraints (objectif pondéré)
-- Équilibrage heures entre employés (hours_balancing)
-- Équité samedis (saturday_fairness)
+- **Équité mensuelle** : une seule variable over/under par employé pour tout le mois (remplace l'ancien équilibrage proportionnel hebdomadaire)
+- Équité samedis (saturday_fairness) avec ajustement long-terme via previous_month_stats
 - Contiguité plages horaires via pénalités de transition (contiguity)
 
-## Tests (15)
+## Injection Statistiques Mois Précédent
+- Champ `previous_month_stats` dans la requête API
+- `total_hours`: heures travaillées par employé le mois précédent → ajuste le target mensuel
+- `saturdays_worked`: samedis travaillés → pénalise ceux qui en ont fait beaucoup
+- Coefficient paramétrable : `long_term_equity_weight` (défaut 0.3)
+
+## Mode Fast Solve
+- Activable via `config.fast_solve: true`
+- Désactive contiguité et équité samedi
+- Réduit significativement le nombre de variables et contraintes
+- Recommandé pour scénarios >10 employés ou >28 jours
+
+## Performance Safeguards
+- Warning automatique si >10 employés
+- Warning automatique si >35 jours
+- Métriques solveur incluses dans chaque réponse
+
+## Tests (22)
 ```bash
 python -m src.tests
 ```
 
-## Exécution locale
-```bash
-pip install -r requirements.txt
-uvicorn main:app --reload
-```
+## RAPPORT FINAL — Phase 6
 
-## Docker
-```bash
-docker build -t planning-api .
-docker run -p 8000:8000 planning-api
-```
+### Impact en nombre de variables
+- Variables principales : E × D × S (employés × jours × créneaux)
+  - 10 employés × 28 jours × 20 créneaux (slot 30min, 10h ouverture) = **5 600 variables booléennes**
+  - 10 employés × 31 jours × 43 créneaux (slot 15min, 10h45 ouverture) = **13 330 variables booléennes**
+- Variables auxiliaires Phase 1 : E × W × jours/semaine pour day_worked (max 6j) = ~10 × 5 × 7 = 350
+- Variables auxiliaires Phase 2 : 2 × E = 20 (over/under mensuel, remplace l'ancien par semaine)
+- Variables auxiliaires contiguité : E × D × (S-1) ≈ 10 × 28 × 19 = 5 320 (désactivable via fast_solve)
+- **Total estimé avec slot 30min** : ~5 900 variables (mesuré), ~2 050 contraintes
+- **Total estimé avec slot 15min** : ~19 000 variables, ~6 000 contraintes
 
-## Déploiement
-### Railway
-1. Connecter le repo GitHub
-2. Railway détecte automatiquement le Dockerfile
-3. Déployer
+### Complexité estimée
+- Complexité linéaire en nombre de jours : O(E × D × S)
+- Pas de croissance exponentielle introduite par les phases
+- Phase 1 (semaines) : découpage O(D/7), contraintes O(E × W × S) — linéaire
+- Phase 2 (équité mensuelle) : 2 variables par employé — O(E), réduit vs ancien
+- Phase 3 (stats précédentes) : ajustement constant par employé — O(E)
+- Phase 4 (métriques) : lecture seule post-solve — O(1)
+- Phase 5 (safeguards) : vérification O(1), fast_solve réduit le modèle
 
-### Render
-1. Créer un Web Service
-2. Start Command : `uvicorn main:app --host 0.0.0.0 --port $PORT`
-3. Déployer
+### Comportement attendu à 10 employés × 31 jours
+- Avec slot 30min, min_staff=2, fast_solve=true : résolution en **5-10 secondes** (mesuré : 6.8s pour 10×28)
+- Avec slot 15min, min_staff=2, fast_solve=false : résolution en **30-90 secondes** (contiguité coûteuse)
+- Avec slot 15min, min_staff=2, fast_solve=true : résolution en **15-30 secondes**
+- Status OPTIMAL atteignable dans la plupart des cas avec max_time_seconds=60
 
-### Test curl
-```bash
-curl -X POST http://localhost:8000/generate-planning \
-  -H "Content-Type: application/json" \
-  -d '{
-    "employees": ["Alice", "Bob"],
-    "contracts": [35, 39],
-    "roles": ["opticien", "vendeur"],
-    "days": ["Lun", "Mar", "Mer"],
-    "unavailabilities": [],
-    "config": {}
-  }'
-```
+### Limites restantes
+1. **Repos 35h** : appliqué via contrainte sur triplets de jours (d, d+1, d+2) : si le gap spanning un jour off < 35h, le jour off ne peut pas être le jour de repos. Combiné avec max 6j/semaine, force au moins un bloc de repos >= 35h. N'utilise pas de fenêtre glissante de 7 jours.
+2. **Découpage semaines** : blocs fixes de 7 jours depuis le jour 0, ne tient pas compte du jour de la semaine réel (lundi, mardi, etc.)
+3. **Previous month stats** : mapping par nom d'employé. Les employés absents des stats précédentes ne sont pas ajustés.
+4. **Contiguité** : coûteuse en variables (E×D×(S-1) variables supplémentaires), fast_solve la désactive
+5. **Pas de planification multi-mois** : chaque appel est indépendant, la continuité inter-mois passe uniquement par previous_month_stats
+6. **Slot 15min** : à 10 employés × 31 jours, le modèle contient ~19 000 variables — le solveur peut ne pas trouver l'optimal dans le timeout
+
+### Temps solveur estimé
+| Scénario | Variables | Contraintes | Temps estimé |
+|----------|-----------|-------------|--------------|
+| 6 emp × 6j, slot 15min | ~1 600 | ~800 | <2s |
+| 10 emp × 28j, slot 30min, fast | ~5 900 | ~2 050 | ~7s |
+| 10 emp × 31j, slot 30min, fast | ~6 500 | ~2 300 | ~10s |
+| 10 emp × 28j, slot 15min, fast | ~12 500 | ~4 500 | ~20s |
+| 10 emp × 31j, slot 15min, normal | ~19 000 | ~6 000 | 30-90s |
 
 ## User Preferences
 - Méthode incrémentale stricte : une seule règle à la fois
@@ -175,14 +195,15 @@ curl -X POST http://localhost:8000/generate-planning \
 - Résumé après chaque étape
 
 ## Recent Changes
-- 2026-02-18: Transformation en API REST production-ready
-  - FastAPI avec endpoint POST /generate-planning
-  - Modèles Pydantic pour validation entrée/sortie
-  - requirements.txt minimal (fastapi, uvicorn, ortools)
-  - Dockerfile minimal (python:3.11-slim)
-  - Imports refactorisés en package Python (src.*)
-  - Aucune dépendance Replit, 100% portable
-  - 15/15 tests passent
+- 2026-02-18: V2 — Implémentation 6 phases :
+  - Phase 1 : Structuration hebdomadaire (get_weeks, max_weekly_hours par semaine, max 6j/semaine, repos 35h)
+  - Phase 2 : Équité mensuelle (add_monthly_hours_balancing, 1 over/under par employé)
+  - Phase 3 : Injection previous_month_stats (total_hours, saturdays_worked, long_term_equity_weight)
+  - Phase 4 : Métriques solveur (num_variables, num_constraints, solver_wall_time, solver_status, gap_percent)
+  - Phase 5 : Safeguards (warnings >10 emp/>35 jours, fast_solve mode)
+  - Phase 6 : Rapport final documenté
+  - 22/22 tests passent (dont 10 emp × 28 jours en 6.8s)
+- 2026-02-18: V1 — API REST production-ready
 - 2026-02-18: Étape 6 — Validation légale enrichie
 - 2026-02-18: Étape 5 — Absences
 - 2026-02-18: Étape 4 — Config JSON hiérarchique

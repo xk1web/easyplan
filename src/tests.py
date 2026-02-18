@@ -1,6 +1,8 @@
 import sys
+import time
 from src.validation import validate_global_feasibility
 from src.model_builder_v1 import build_and_solve_v1, _sum_ranges_hours
+from src.hard_constraints import get_weeks
 
 
 def test_feasible_simple():
@@ -327,6 +329,206 @@ def test_soft_contiguity():
     print("TEST 11 OK : soft contiguité — plages peu fragmentées")
 
 
+def test_weekly_structuring():
+    weeks = get_weeks(31)
+    assert len(weeks) == 5
+    assert weeks[0] == [0, 1, 2, 3, 4, 5, 6]
+    assert weeks[1] == [7, 8, 9, 10, 11, 12, 13]
+    assert weeks[4] == [28, 29, 30]
+
+    weeks_28 = get_weeks(28)
+    assert len(weeks_28) == 4
+    assert all(len(w) == 7 for w in weeks_28)
+
+    weeks_6 = get_weeks(6)
+    assert len(weeks_6) == 1
+    assert weeks_6[0] == [0, 1, 2, 3, 4, 5]
+    print("TEST 16 OK : découpage en semaines correct")
+
+
+def test_max_6_days_per_week():
+    employees = ["Alice", "Bob", "Charlie"]
+    days = [f"J{i}" for i in range(7)]
+    contracts = [40, 40, 40]
+    config = {
+        "schedule": {
+            "start_time_minutes": 9 * 60,
+            "end_time_minutes": 17 * 60,
+            "slot_minutes": 30,
+            "min_staff_per_slot": 1
+        },
+        "hard_constraints": {
+            "max_weekly_hours": True,
+            "max_days_per_week": 6,
+            "max_daily_minutes": 600,
+            "rest_between_days_minutes": 660,
+            "require_qualified_optician": False
+        },
+        "soft_weights": {
+            "hours_balancing": 10,
+            "saturday_fairness": 0,
+            "contiguity": 0
+        },
+        "solver": {"max_time_seconds": 30}
+    }
+    result = build_and_solve_v1(employees, days, contracts, config)
+    assert "error" not in result, f"Solveur échoué: {result}"
+    for emp_name, emp_data in result["schedule"].items():
+        days_worked = len(emp_data["days"])
+        assert days_worked <= 6, (
+            f"{emp_name} travaille {days_worked} jours, max 6"
+        )
+    print("TEST 17 OK : max 6 jours travaillés par semaine respecté")
+
+
+def test_metrics_present():
+    employees = ["Alice", "Bob"]
+    days = ["Lun", "Mar"]
+    contracts = [20, 20]
+    config = {
+        "start_time_minutes": 9 * 60,
+        "end_time_minutes": 17 * 60,
+        "min_staff_per_slot": 1
+    }
+    result = build_and_solve_v1(employees, days, contracts, config)
+    assert "error" not in result
+    assert "metrics" in result
+    m = result["metrics"]
+    assert "num_variables" in m
+    assert "num_constraints" in m
+    assert "solver_wall_time" in m
+    assert "solver_status" in m
+    assert m["num_variables"] > 0
+    assert m["num_constraints"] > 0
+    assert m["solver_status"] in ("OPTIMAL", "FEASIBLE")
+    print("TEST 18 OK : métriques solveur présentes et valides")
+
+
+def test_fast_solve_mode():
+    employees = ["Alice", "Bob", "Charlie"]
+    days = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"]
+    contracts = [35, 35, 35]
+    config_normal = {
+        "schedule": {
+            "start_time_minutes": 9 * 60,
+            "end_time_minutes": 18 * 60,
+            "slot_minutes": 30,
+            "min_staff_per_slot": 1
+        },
+        "hard_constraints": {
+            "max_weekly_hours": True,
+            "max_daily_minutes": 600,
+            "rest_between_days_minutes": 660,
+            "require_qualified_optician": False
+        },
+        "soft_weights": {
+            "hours_balancing": 10,
+            "saturday_fairness": 5,
+            "contiguity": 3
+        },
+        "solver": {"max_time_seconds": 30},
+        "fast_solve": False
+    }
+    config_fast = dict(config_normal)
+    config_fast["fast_solve"] = True
+
+    result_fast = build_and_solve_v1(employees, days, contracts, config_fast)
+    assert "error" not in result_fast
+    assert "metrics" in result_fast
+    print("TEST 19 OK : fast_solve mode fonctionne")
+
+
+def test_previous_month_stats():
+    employees = ["Alice", "Bob", "Charlie"]
+    days = ["Lun", "Mar", "Mer", "Jeu", "Ven"]
+    contracts = [35, 35, 35]
+    config = {
+        "schedule": {
+            "start_time_minutes": 9 * 60,
+            "end_time_minutes": 18 * 60,
+            "slot_minutes": 30,
+            "min_staff_per_slot": 1
+        },
+        "hard_constraints": {
+            "max_weekly_hours": True,
+            "max_daily_minutes": 600,
+            "rest_between_days_minutes": 660,
+            "require_qualified_optician": False
+        },
+        "soft_weights": {
+            "hours_balancing": 10,
+            "saturday_fairness": 0,
+            "contiguity": 0
+        },
+        "solver": {"max_time_seconds": 30},
+        "long_term_equity_weight": 0.3
+    }
+    prev_stats = {
+        "total_hours": {"Alice": 160, "Bob": 130, "Charlie": 140},
+        "saturdays_worked": {"Alice": 4, "Bob": 1, "Charlie": 2}
+    }
+    result = build_and_solve_v1(employees, days, contracts, config,
+                                 previous_month_stats=prev_stats)
+    assert "error" not in result
+    _verify_hours_coherence(result)
+    print("TEST 20 OK : previous_month_stats accepté et traité")
+
+
+def test_performance_warnings():
+    employees = [f"Emp{i}" for i in range(12)]
+    days = [f"J{i}" for i in range(5)]
+    contracts = [35] * 12
+    config = {
+        "start_time_minutes": 9 * 60,
+        "end_time_minutes": 14 * 60,
+        "min_staff_per_slot": 1
+    }
+    result = build_and_solve_v1(employees, days, contracts, config)
+    assert "metrics" in result
+    assert "warnings" in result["metrics"]
+    assert any(">10" in w for w in result["metrics"]["warnings"])
+    print("TEST 21 OK : warning >10 employés affiché")
+
+
+def test_monthly_planning_10_employees():
+    employees = [f"Emp{i}" for i in range(10)]
+    days = [f"J{i}" for i in range(28)]
+    contracts = [35, 39, 40, 35, 20, 30, 35, 40, 39, 25]
+    roles = ["opticien", "vendeur", "opticien", "vendeur", "vendeur",
+             "opticien", "vendeur", "opticien", "vendeur", "opticien"]
+    config = {
+        "schedule": {
+            "start_time_minutes": 9 * 60 + 30,
+            "end_time_minutes": 19 * 60 + 30,
+            "slot_minutes": 30,
+            "min_staff_per_slot": 2
+        },
+        "hard_constraints": {
+            "max_weekly_hours": True,
+            "max_days_per_week": 6,
+            "max_daily_minutes": 600,
+            "rest_between_days_minutes": 660,
+            "require_qualified_optician": True
+        },
+        "soft_weights": {
+            "hours_balancing": 10,
+            "saturday_fairness": 0,
+            "contiguity": 0
+        },
+        "solver": {"max_time_seconds": 60},
+        "fast_solve": True
+    }
+    t0 = time.time()
+    result = build_and_solve_v1(employees, days, contracts, config, roles=roles)
+    elapsed = time.time() - t0
+    assert "error" not in result, f"Solveur échoué pour 10x28: {result.get('error')}"
+    _verify_hours_coherence(result)
+    m = result["metrics"]
+    print(f"TEST 22 OK : 10 employés × 28 jours résolu en {elapsed:.1f}s "
+          f"({m['num_variables']} vars, {m['num_constraints']} contraintes, "
+          f"status={m['solver_status']})")
+
+
 if __name__ == "__main__":
     passed = 0
     failed = 0
@@ -347,6 +549,13 @@ if __name__ == "__main__":
         test_unavailability_slot,
         test_validation_no_optician,
         test_validation_mismatched_lengths,
+        test_weekly_structuring,
+        test_max_6_days_per_week,
+        test_metrics_present,
+        test_fast_solve_mode,
+        test_previous_month_stats,
+        test_performance_warnings,
+        test_monthly_planning_10_employees,
     ]:
         try:
             test_fn()

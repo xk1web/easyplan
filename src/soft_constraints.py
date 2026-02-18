@@ -1,8 +1,10 @@
 from ortools.sat.python import cp_model
 
 
-def add_hours_balancing(model, x, num_employees, num_days, num_slots,
-                        contracts, slot_minutes, weight=10):
+def add_monthly_hours_balancing(model, x, num_employees, num_days, num_slots,
+                                contracts, slot_minutes, weight=10,
+                                previous_month_stats=None, long_term_equity_weight=0.0,
+                                employees=None):
     penalties = []
 
     total_contract = sum(contracts)
@@ -19,8 +21,18 @@ def add_hours_balancing(model, x, num_employees, num_days, num_slots,
         )
         target_slots = int(contracts[e] / total_contract * total_available_slots)
 
-        over = model.NewIntVar(0, num_days * num_slots, f"bal_over_{e}")
-        under = model.NewIntVar(0, num_days * num_slots, f"bal_under_{e}")
+        if previous_month_stats and long_term_equity_weight > 0 and employees:
+            prev_hours = previous_month_stats.get("total_hours", {})
+            emp_name = employees[e] if e < len(employees) else None
+            if emp_name and emp_name in prev_hours:
+                prev_h = prev_hours[emp_name]
+                expected_prev = contracts[e]
+                delta_hours = prev_h - expected_prev
+                delta_slots = int(delta_hours * 60 / slot_minutes * long_term_equity_weight)
+                target_slots = max(0, target_slots - delta_slots)
+
+        over = model.NewIntVar(0, num_days * num_slots, f"month_bal_over_{e}")
+        under = model.NewIntVar(0, num_days * num_slots, f"month_bal_under_{e}")
         model.Add(emp_slots - target_slots == over - under)
 
         penalties.append((over, weight))
@@ -30,7 +42,9 @@ def add_hours_balancing(model, x, num_employees, num_days, num_slots,
 
 
 def add_saturday_fairness(model, x, num_employees, num_days, num_slots,
-                          days, slot_minutes, weight=5):
+                          days, slot_minutes, weight=5,
+                          previous_month_stats=None, long_term_equity_weight=0.0,
+                          employees=None):
     penalties = []
     saturday_indices = [i for i, d in enumerate(days) if d.lower().startswith("sam")]
     if not saturday_indices:
@@ -49,10 +63,23 @@ def add_saturday_fairness(model, x, num_employees, num_days, num_slots,
         sat_counts.append(has_sat)
 
     total_sats = sum(sat_counts)
+
     for e in range(num_employees):
+        base_penalty_weight = weight
+
+        if previous_month_stats and long_term_equity_weight > 0 and employees:
+            prev_sats = previous_month_stats.get("saturdays_worked", {})
+            emp_name = employees[e] if e < len(employees) else None
+            if emp_name and emp_name in prev_sats:
+                avg_prev_sats = sum(prev_sats.values()) / max(len(prev_sats), 1)
+                emp_prev_sats = prev_sats[emp_name]
+                if emp_prev_sats > avg_prev_sats:
+                    extra = int((emp_prev_sats - avg_prev_sats) * long_term_equity_weight * weight)
+                    base_penalty_weight = weight + extra
+
         penalty = model.NewIntVar(0, 1, f"sat_pen_{e}")
         model.Add(penalty >= sat_counts[e] * num_employees - total_sats)
-        penalties.append((penalty, weight))
+        penalties.append((penalty, base_penalty_weight))
 
     return penalties
 
