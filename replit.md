@@ -20,7 +20,7 @@ Portable et déployable sur n'importe quelle infrastructure (Railway, Render, VP
 │   ├── validation.py            — Validation structurelle et légale
 │   ├── config.py                — Config JSON hiérarchique avec valeurs par défaut (fast_solve, long_term_equity_weight)
 │   ├── ai_runner.py             — Script CLI standalone
-│   └── tests.py                 — 23 tests automatisés
+│   └── tests.py                 — 24 tests automatisés
 ├── frontend/                    — Frontend de test minimal (Vite + React)
 │   ├── index.html               — Point d'entrée HTML
 │   ├── package.json             — Dépendances Node.js
@@ -122,6 +122,7 @@ Génère un planning mensuel optimisé.
 - Repos inter-journalier ≥ 11h (rest_between_days_minutes)
 - Repos hebdomadaire 35h consécutives (contrainte explicite sur triplets de jours + max 6j/semaine)
 - Présence opticien diplômé obligatoire (RULE 5.1)
+- Durée minimale journalière ≥ 4h (min_daily_minutes, configurable, 0 = désactivé)
 - Absences (journées complètes ou créneaux spécifiques)
 
 ## Soft Constraints (objectif pondéré)
@@ -147,7 +148,7 @@ Génère un planning mensuel optimisé.
 - Warning automatique si >35 jours
 - Métriques solveur incluses dans chaque réponse
 
-## Tests (23)
+## Tests (24)
 ```bash
 python -m src.tests
 ```
@@ -209,6 +210,12 @@ python -m src.tests
 - **Frontend** : `cd frontend && npm run dev` (port 5000, proxy /generate-planning → localhost:8000)
 
 ## Recent Changes
+- 2026-02-18: **Contrainte hard min_daily_minutes** — durée minimale journalière
+  - Paramètre configurable dans hard_constraints (défaut 240 min = 4h, 0 = désactivé)
+  - Logique : si un employé travaille un jour, il doit travailler ≥ min_daily_slots
+  - Utilise day_worked BoolVar + OnlyEnforceIf (modélisation linéaire)
+  - Résultat mesuré 6×30 : solve 2.7s, OPTIMAL, gap 0%, aucun jour < 4h
+  - 24/24 tests passent
 - 2026-02-18: **Contract-driven planning** — le moteur passe en mode contrat-principal
   - hours_balancing désactivé par défaut (weight=0, code conservé)
   - contract_target (weight=50) : pénalise uniquement le sous-contrat, pas le dépassement
