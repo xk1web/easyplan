@@ -5,7 +5,7 @@ from ortools.sat.python import cp_model
 from src.hard_constraints import (
     add_min_coverage, add_max_weekly_hours, add_max_daily_hours,
     add_qualified_optician_coverage, add_unavailabilities, add_rest_between_days,
-    add_max_days_per_week, add_weekly_rest_35h
+    add_max_days_per_week, add_weekly_rest_35h, add_min_daily_work_duration
 )
 from src.soft_constraints import (
     add_monthly_hours_balancing, add_saturday_fairness, add_contiguity_preference,
@@ -123,6 +123,10 @@ def build_and_solve_v1(
         add_max_weekly_hours(model, x, num_employees, num_days, num_slots, contracts, slot_minutes)
     add_max_daily_hours(model, x, num_employees, num_days, num_slots, slot_minutes,
                         max_daily_minutes=max_daily_min)
+    min_daily_min = hard.get("min_daily_minutes", 0)
+    if min_daily_min > 0:
+        add_min_daily_work_duration(model, x, num_employees, num_days, num_slots,
+                                    slot_minutes, min_daily_minutes=min_daily_min)
     add_max_days_per_week(model, x, num_employees, num_days, num_slots, max_days=max_days_week)
     if require_optician and roles is not None:
         add_qualified_optician_coverage(model, x, num_employees, num_days, num_slots, roles)

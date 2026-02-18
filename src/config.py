@@ -15,7 +15,8 @@ DEFAULT_CONFIG = {
         "max_daily_minutes": 600,
         "rest_between_days_minutes": 660,
         "weekly_rest_minutes": 2100,
-        "require_qualified_optician": True
+        "require_qualified_optician": True,
+        "min_daily_minutes": 240
     },
     "soft_weights": {
         "hours_balancing": 0,

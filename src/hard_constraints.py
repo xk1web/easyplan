@@ -69,6 +69,20 @@ def add_weekly_rest_35h(model, x, num_employees, num_days, num_slots,
                         ])
 
 
+def add_min_daily_work_duration(model, x, num_employees, num_days, num_slots,
+                                slot_minutes, min_daily_minutes=240):
+    if min_daily_minutes <= 0:
+        return
+    min_daily_slots = min_daily_minutes // slot_minutes
+    for e in range(num_employees):
+        for d in range(num_days):
+            day_worked = model.NewBoolVar(f"min_dur_worked_{e}_{d}")
+            daily_slots = sum(x[(e, d, s)] for s in range(num_slots))
+            model.Add(daily_slots >= 1).OnlyEnforceIf(day_worked)
+            model.Add(daily_slots == 0).OnlyEnforceIf(day_worked.Not())
+            model.Add(daily_slots >= min_daily_slots).OnlyEnforceIf(day_worked)
+
+
 def add_max_daily_hours(model, x, num_employees, num_days, num_slots,
                         slot_minutes, max_daily_minutes=600):
     max_daily_slots = max_daily_minutes // slot_minutes
