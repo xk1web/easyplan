@@ -1,0 +1,65 @@
+OBJECTIF GLOBAL
+Générer un planning pour 1 mois (~28–31 jours).
+Appliquer contraintes dures par semaine.
+Appliquer équité au niveau mensuel.
+Permettre d’injecter des statistiques du mois précédent pour équilibrage long-terme.
+Rester performant pour 10 employés.
+PHASE 1 — Structuration Hebdomadaire
+Ajouter une notion explicite de semaines :
+Découper automatiquement la liste days en blocs de 7 jours.
+Ne pas supposer qu’un mois commence un lundi.
+Appliquer les contraintes suivantes par semaine :
+max_weekly_hours
+6 jours travaillés max
+repos 35h consécutives (quand implémenté)
+Vérifier que la complexité reste linéaire en nombre de jours.
+Ne rien implémenter avant analyse.
+PHASE 2 — Équité Mensuelle
+Supprimer l’équilibrage proportionnel hebdomadaire actuel.
+Introduire :
+total_month_slots_e = somme sur tous les jours du mois.
+Calculer :
+target_month_slots_e proportionnel au contrat.
+Ajouter pénalité unique :
+|total_month_slots_e - target_month_slots_e|
+Mesurer le nombre de nouvelles variables ajoutées.
+Objectif : une seule variable over/under par employé pour le mois.
+PHASE 3 — Injection Statistiques Mois Précédent
+Modifier l’API pour accepter :
+"previous_month_stats": {
+  "total_hours": { "Alice": 152, "Bob": 160 },
+  "saturdays_worked": { "Alice": 2, "Bob": 4 }
+}
+Utilisation :
+Ajuster target_month_slots_e :
+Si un employé a travaillé plus le mois précédent → diminuer légèrement son target courant.
+Si moins → augmenter légèrement.
+Ajuster équité samedi :
+Pénaliser ceux ayant déjà fait beaucoup de samedis.
+Implémenter avec un coefficient paramétrable dans config :
+long_term_equity_weight
+Ne pas complexifier exponentiellement le modèle.
+PHASE 4 — Performance & Métriques
+Ajouter dans la réponse API :
+nombre de variables
+nombre de contraintes
+temps solveur réel
+statut solveur
+gap si optimal non atteint
+Ajouter logs internes facultatifs.
+PHASE 5 — Sécurisation Performance
+Ajouter garde-fou :
+Si employés > 10 → warning
+Si jours > 35 → warning
+Ajouter mode “fast solve” :
+Désactive contiguïté
+Désactive équité samedi
+Activable via config.
+PHASE 6 — Rapport Final
+Fournir :
+Impact en nombre de variables
+Complexité estimée
+Comportement attendu à 10 employés × 31 jours
+Limites restantes
+Temps solveur estimé
+Ne résume pas. Sois précis.
