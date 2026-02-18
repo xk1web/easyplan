@@ -21,6 +21,13 @@ Portable et déployable sur n'importe quelle infrastructure (Railway, Render, VP
 │   ├── config.py                — Config JSON hiérarchique avec valeurs par défaut (fast_solve, long_term_equity_weight)
 │   ├── ai_runner.py             — Script CLI standalone
 │   └── tests.py                 — 22 tests automatisés
+├── frontend/                    — Frontend de test minimal (Vite + React)
+│   ├── index.html               — Point d'entrée HTML
+│   ├── package.json             — Dépendances Node.js
+│   ├── vite.config.js           — Config Vite (proxy vers backend :8000)
+│   └── src/
+│       ├── main.jsx             — Entrée React
+│       └── App.jsx              — Formulaire + appel API + affichage résultats
 ├── scheduler.py                 — Ancien scheduler (conservé, non utilisé)
 └── src/app.py                   — Ancien serveur HTTP (conservé, non utilisé)
 ```
@@ -194,6 +201,10 @@ python -m src.tests
 - Fiabilité > performance > élégance
 - Ne pas anticiper les phases suivantes
 - Résumé après chaque étape
+
+## Workflows
+- **Backend API** : `uvicorn main:app --host 0.0.0.0 --port 8000 --reload` (port 8000)
+- **Frontend** : `cd frontend && npm run dev` (port 5000, proxy /generate-planning → localhost:8000)
 
 ## Recent Changes
 - 2026-02-18: Refonte contiguité v2 — Modélisation par blocs (SAT clauses + excess + hints)
