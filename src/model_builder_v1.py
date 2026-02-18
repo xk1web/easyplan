@@ -103,8 +103,7 @@ def build_and_solve_v1(
     w_balance = weights.get("hours_balancing", 10)
     w_saturday = 0 if fast_solve else weights.get("saturday_fairness", 5)
     w_contiguity = 0 if fast_solve else weights.get("contiguity", 3)
-    w_contract_under = 0 if fast_solve else weights.get("contract_target_under", 8)
-    w_contract_over = 0 if fast_solve else weights.get("contract_target_over", 12)
+    w_contract_target = 0 if fast_solve else weights.get("contract_target", 50)
 
     long_term_weight = config.get("long_term_equity_weight", 0.0)
 
@@ -157,12 +156,11 @@ def build_and_solve_v1(
             add_contiguity_preference(model, x, num_employees, num_days, num_slots,
                                       slot_minutes, weight=w_contiguity)
         )
-    if w_contract_under > 0 or w_contract_over > 0:
+    if w_contract_target > 0:
         all_penalties.extend(
             add_contract_target_penalty(model, x, num_employees, num_days, num_slots,
                                         contracts, slot_minutes,
-                                        weight_under=w_contract_under,
-                                        weight_over=w_contract_over)
+                                        weight=w_contract_target)
         )
 
     if all_penalties:
