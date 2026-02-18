@@ -175,10 +175,26 @@ function App() {
 const cellStyle = { border: '1px solid #ccc', padding: '5px 10px' };
 
 function ScheduleView({ schedule }) {
-  const employeeStats = schedule.employee_stats || {};
-  const dailySchedule = schedule.daily_schedule || {};
+  const employees = Object.keys(schedule);
 
-  const employees = Object.keys(employeeStats);
+  const allDays = new Set();
+  employees.forEach(emp => {
+    Object.keys(schedule[emp].days).forEach(d => allDays.add(d));
+  });
+  const sortedDays = [...allDays].sort((a, b) => {
+    const numA = parseInt(a.replace(/\D/g, ''), 10);
+    const numB = parseInt(b.replace(/\D/g, ''), 10);
+    return numA - numB;
+  });
+
+  const countSaturdays = (emp) => {
+    let count = 0;
+    Object.keys(schedule[emp].days).forEach(d => {
+      const idx = parseInt(d.replace(/\D/g, ''), 10);
+      if (idx % 7 === 5) count++;
+    });
+    return count;
+  };
 
   return (
     <>
@@ -195,27 +211,22 @@ function ScheduleView({ schedule }) {
           {employees.map(emp => (
             <tr key={emp}>
               <td style={cellStyle}>{emp}</td>
-              <td style={cellStyle}>{employeeStats[emp]?.total_hours ?? 'N/A'}</td>
-              <td style={cellStyle}>{employeeStats[emp]?.saturdays_worked ?? 'N/A'}</td>
+              <td style={cellStyle}>{schedule[emp].total_hours.toFixed(1)}</td>
+              <td style={cellStyle}>{countSaturdays(emp)}</td>
             </tr>
           ))}
         </tbody>
       </table>
 
       <h3>Planning par jour</h3>
-      {Object.keys(dailySchedule).length === 0 && <p>Aucune donnee de planning.</p>}
-      {Object.entries(dailySchedule).map(([day, data]) => (
-        <div key={day} style={{ marginBottom: '10px' }}>
-          <b>{day}</b>: {' '}
-          {data.employees_present
-            ? data.employees_present.join(', ')
-            : (data.assignments
-              ? Object.keys(data.assignments).join(', ')
-              : JSON.stringify(data)
-            )
-          }
-        </div>
-      ))}
+      {sortedDays.map(day => {
+        const present = employees.filter(emp => schedule[emp].days[day]);
+        return (
+          <div key={day} style={{ marginBottom: '5px' }}>
+            <b>{day}</b>: {present.join(', ') || 'Aucun'}
+          </div>
+        );
+      })}
     </>
   );
 }
