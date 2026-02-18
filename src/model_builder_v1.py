@@ -1,10 +1,10 @@
 from typing import List, Dict, Optional
 from ortools.sat.python import cp_model
-from hard_constraints import (
+from src.hard_constraints import (
     add_min_coverage, add_max_weekly_hours, add_max_daily_hours,
     add_qualified_optician_coverage, add_unavailabilities, add_rest_between_days
 )
-from soft_constraints import (
+from src.soft_constraints import (
     add_hours_balancing, add_saturday_fairness, add_contiguity_preference
 )
 

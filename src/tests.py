@@ -1,6 +1,6 @@
 import sys
-from validation import validate_global_feasibility
-from model_builder_v1 import build_and_solve_v1, _sum_ranges_hours
+from src.validation import validate_global_feasibility
+from src.model_builder_v1 import build_and_solve_v1, _sum_ranges_hours
 
 
 def test_feasible_simple():
@@ -165,7 +165,7 @@ def test_rest_between_days():
     result = build_and_solve_v1(employees, days, contracts, config)
     assert "error" not in result
     _verify_hours_coherence(result)
-    from model_builder_v1 import _hhmm_to_minutes
+    from src.model_builder_v1 import _hhmm_to_minutes
     for emp_name, emp_data in result["schedule"].items():
         if "Lun" in emp_data["days"] and "Mar" in emp_data["days"]:
             lun_ranges = emp_data["days"]["Lun"]["ranges"]
@@ -262,7 +262,7 @@ def test_unavailability_slot():
     _verify_hours_coherence(result)
     alice_data = result["schedule"]["Alice"]
     if "Lun" in alice_data["days"]:
-        from model_builder_v1 import _hhmm_to_minutes
+        from src.model_builder_v1 import _hhmm_to_minutes
         for r in alice_data["days"]["Lun"]["ranges"]:
             assert _hhmm_to_minutes(r["start"]) > 9 * 60, (
                 "Alice ne devrait pas travailler au créneau 09:00"

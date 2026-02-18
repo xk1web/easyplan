@@ -1,7 +1,7 @@
 import sys
-from config import load_config
-from validation import validate_global_feasibility
-from model_builder_v1 import build_and_solve_v1
+from src.config import load_config
+from src.validation import validate_global_feasibility
+from src.model_builder_v1 import build_and_solve_v1
 
 employees = ["Alice", "Bob", "Charlie", "David", "Eve", "Frank"]
 days = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"]
