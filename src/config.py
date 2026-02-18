@@ -20,7 +20,9 @@ DEFAULT_CONFIG = {
     "soft_weights": {
         "hours_balancing": 10,
         "saturday_fairness": 5,
-        "contiguity": 3
+        "contiguity": 3,
+        "contract_target_under": 8,
+        "contract_target_over": 12
     },
     "solver": {
         "max_time_seconds": 30

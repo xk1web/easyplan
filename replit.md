@@ -103,7 +103,9 @@ Génère un planning mensuel optimisé.
   "soft_weights": {
     "hours_balancing": 10,
     "saturday_fairness": 5,
-    "contiguity": 3
+    "contiguity": 3,
+    "contract_target_under": 8,
+    "contract_target_over": 12
   },
   "solver": {
     "max_time_seconds": 30
@@ -207,6 +209,10 @@ python -m src.tests
 - **Frontend** : `cd frontend && npm run dev` (port 5000, proxy /generate-planning → localhost:8000)
 
 ## Recent Changes
+- 2026-02-18: Ajout pénalité soft contract_target — incite chaque employé à atteindre son contrat sans le dépasser
+  - weight_under=8 (en dessous du contrat), weight_over=12 (dépassement, pénalisé plus fort)
+  - Calcul automatique du target en slots selon la durée de la période (weeks_in_period = num_days / 7)
+  - Désactivé en fast_solve, poids configurables via soft_weights
 - 2026-02-18: Refonte contiguité v2 — Modélisation par blocs (SAT clauses + excess + hints)
   - Ancien : AddAbsEquality + IntVar diff → 12 000 vars, 12 000 contraintes contiguité, timeout
   - Nouveau : AddBoolOr (SAT clause) + excess IntVar + AddHint → 6 300 vars, 6 300 contraintes contiguité

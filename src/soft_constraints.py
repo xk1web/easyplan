@@ -84,6 +84,36 @@ def add_saturday_fairness(model, x, num_employees, num_days, num_slots,
     return penalties
 
 
+def add_contract_target_penalty(model, x, num_employees, num_days, num_slots,
+                                contracts, slot_minutes, weight_under=8,
+                                weight_over=12):
+    penalties = []
+
+    weeks_in_period = max(num_days / 7.0, 1.0)
+
+    for e in range(num_employees):
+        if contracts[e] <= 0:
+            continue
+
+        target_slots = int(round(contracts[e] * 60 / slot_minutes * weeks_in_period))
+        target_slots = min(target_slots, num_days * num_slots)
+
+        emp_slots = sum(
+            x[(e, d, s)]
+            for d in range(num_days)
+            for s in range(num_slots)
+        )
+
+        over = model.NewIntVar(0, num_days * num_slots, f"contract_over_{e}")
+        under = model.NewIntVar(0, num_days * num_slots, f"contract_under_{e}")
+        model.Add(emp_slots - target_slots == over - under)
+
+        penalties.append((over, weight_over))
+        penalties.append((under, weight_under))
+
+    return penalties
+
+
 def add_contiguity_preference(model, x, num_employees, num_days, num_slots,
                               slot_minutes, weight=3):
     penalties = []
