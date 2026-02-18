@@ -353,6 +353,53 @@ function ScheduleView({ schedule }) {
     return count;
   };
 
+  const dayLabels = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+
+  const getDayLabel = (day) => {
+    const idx = parseInt(day.replace(/\D/g, ''), 10);
+    const weekday = dayLabels[idx % 7];
+    const weekNum = Math.floor(idx / 7) + 1;
+    return `${day} (${weekday} S${weekNum})`;
+  };
+
+  const formatRanges = (ranges) => {
+    if (!ranges || ranges.length === 0) return '';
+    return ranges.map(r => `${r[0]}-${r[1]}`).join(', ');
+  };
+
+  const schedCellStyle = {
+    ...cellStyle,
+    fontSize: '11px',
+    whiteSpace: 'nowrap',
+    textAlign: 'center',
+    padding: '3px 5px',
+  };
+
+  const headerCellStyle = {
+    ...cellStyle,
+    fontSize: '11px',
+    fontWeight: 'bold',
+    textAlign: 'center',
+    padding: '3px 5px',
+    background: '#f0f0f0',
+  };
+
+  const restCellStyle = {
+    ...schedCellStyle,
+    background: '#f9f9f9',
+    color: '#bbb',
+  };
+
+  const saturdayCellStyle = {
+    ...headerCellStyle,
+    background: '#fff3cd',
+  };
+
+  const sundayCellStyle = {
+    ...headerCellStyle,
+    background: '#f8d7da',
+  };
+
   return (
     <>
       <h3>Stats employes</h3>
@@ -375,15 +422,48 @@ function ScheduleView({ schedule }) {
         </tbody>
       </table>
 
-      <h3>Planning par jour</h3>
-      {sortedDays.map(day => {
-        const present = employees.filter(emp => schedule[emp].days[day]);
-        return (
-          <div key={day} style={{ marginBottom: '5px' }}>
-            <b>{day}</b>: {present.join(', ') || 'Aucun'}
-          </div>
-        );
-      })}
+      <h3>Planning detaille</h3>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+          <thead>
+            <tr>
+              <th style={headerCellStyle}>Jour</th>
+              {employees.map(emp => (
+                <th key={emp} style={headerCellStyle}>{emp}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sortedDays.map(day => {
+              const dayIdx = parseInt(day.replace(/\D/g, ''), 10);
+              const weekdayIdx = dayIdx % 7;
+              const isSaturday = weekdayIdx === 5;
+              const isSunday = weekdayIdx === 6;
+              const rowDayStyle = isSunday ? sundayCellStyle : isSaturday ? saturdayCellStyle : headerCellStyle;
+
+              return (
+                <tr key={day}>
+                  <td style={rowDayStyle}>{getDayLabel(day)}</td>
+                  {employees.map(emp => {
+                    const dayData = schedule[emp].days[day];
+                    if (!dayData) {
+                      return <td key={emp} style={restCellStyle}>repos</td>;
+                    }
+                    const ranges = formatRanges(dayData.ranges);
+                    const hours = dayData.hours;
+                    return (
+                      <td key={emp} style={schedCellStyle}>
+                        <div>{ranges}</div>
+                        <div style={{ fontSize: '10px', color: '#666' }}>{hours.toFixed(1)}h</div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }
