@@ -587,6 +587,54 @@ def test_contract_driven_planning():
               f"delta={total - target:+.1f}h")
 
 
+def test_min_daily_work_duration():
+    employees = ["Emp0", "Emp1", "Emp2", "Emp3", "Emp4", "Emp5"]
+    days = [f"J{i}" for i in range(30)]
+    contracts = [35, 39, 35, 39, 35, 39]
+    config = {
+        "schedule": {
+            "start_time_minutes": 9 * 60 + 30,
+            "end_time_minutes": 19 * 60 + 30,
+            "slot_minutes": 30,
+            "min_staff_per_slot": 2
+        },
+        "hard_constraints": {
+            "max_weekly_hours": True,
+            "max_days_per_week": 6,
+            "max_daily_minutes": 600,
+            "rest_between_days_minutes": 660,
+            "require_qualified_optician": False,
+            "min_daily_minutes": 240
+        },
+        "soft_weights": {
+            "hours_balancing": 0,
+            "saturday_fairness": 0,
+            "contiguity": 0,
+            "contract_target": 50
+        },
+        "solver": {"max_time_seconds": 60},
+        "fast_solve": False
+    }
+
+    t0 = time.time()
+    result = build_and_solve_v1(employees, days, contracts, config)
+    elapsed = time.time() - t0
+    assert "error" not in result, f"Solveur échoué: {result.get('error')}"
+    _verify_hours_coherence(result)
+
+    min_hours = 240 / 60.0
+    for emp_name, emp_data in result["schedule"].items():
+        for day_name, day_info in emp_data["days"].items():
+            assert day_info["hours"] >= min_hours - 1e-9, (
+                f"{emp_name} {day_name}: {day_info['hours']}h < {min_hours}h min journalier"
+            )
+
+    m = result["metrics"]
+    print(f"TEST 24 OK : min_daily_minutes=240 — aucun jour < 4h")
+    print(f"  Solve time: {elapsed:.2f}s, status={m['solver_status']}, "
+          f"gap={m['gap_percent']}%")
+
+
 if __name__ == "__main__":
     passed = 0
     failed = 0
@@ -615,6 +663,7 @@ if __name__ == "__main__":
         test_performance_warnings,
         test_monthly_planning_10_employees,
         test_contract_driven_planning,
+        test_min_daily_work_duration,
     ]:
         try:
             test_fn()
