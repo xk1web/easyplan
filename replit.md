@@ -20,7 +20,7 @@ Portable et déployable sur n'importe quelle infrastructure (Railway, Render, VP
 │   ├── validation.py            — Validation structurelle et légale
 │   ├── config.py                — Config JSON hiérarchique avec valeurs par défaut (fast_solve, long_term_equity_weight)
 │   ├── ai_runner.py             — Script CLI standalone
-│   └── tests.py                 — 22 tests automatisés
+│   └── tests.py                 — 23 tests automatisés
 ├── frontend/                    — Frontend de test minimal (Vite + React)
 │   ├── index.html               — Point d'entrée HTML
 │   ├── package.json             — Dépendances Node.js
@@ -101,11 +101,10 @@ Génère un planning mensuel optimisé.
     "require_qualified_optician": true
   },
   "soft_weights": {
-    "hours_balancing": 10,
+    "hours_balancing": 0,
     "saturday_fairness": 5,
     "contiguity": 3,
-    "contract_target_under": 8,
-    "contract_target_over": 12
+    "contract_target": 50
   },
   "solver": {
     "max_time_seconds": 30
@@ -126,7 +125,8 @@ Génère un planning mensuel optimisé.
 - Absences (journées complètes ou créneaux spécifiques)
 
 ## Soft Constraints (objectif pondéré)
-- **Équité mensuelle** : une seule variable over/under par employé pour tout le mois (remplace l'ancien équilibrage proportionnel hebdomadaire)
+- **Contract target (principal)** : pénalise uniquement le sous-effectif par rapport au contrat, pas le dépassement (weight=50). Formule : `contract_slots = contract_h × 60 / slot_min × (num_days / 7)`. La sur-couverture est autorisée (max_weekly_hours reste hard).
+- **Équité mensuelle** : désactivée par défaut (hours_balancing=0), conservée dans le code, réactivable via config.
 - Équité samedis (saturday_fairness) avec ajustement long-terme via previous_month_stats
 - Contiguité plages horaires via pénalités de transition (contiguity)
 
@@ -147,7 +147,7 @@ Génère un planning mensuel optimisé.
 - Warning automatique si >35 jours
 - Métriques solveur incluses dans chaque réponse
 
-## Tests (22)
+## Tests (23)
 ```bash
 python -m src.tests
 ```
@@ -209,10 +209,13 @@ python -m src.tests
 - **Frontend** : `cd frontend && npm run dev` (port 5000, proxy /generate-planning → localhost:8000)
 
 ## Recent Changes
-- 2026-02-18: Ajout pénalité soft contract_target — incite chaque employé à atteindre son contrat sans le dépasser
-  - weight_under=8 (en dessous du contrat), weight_over=12 (dépassement, pénalisé plus fort)
-  - Calcul automatique du target en slots selon la durée de la période (weeks_in_period = num_days / 7)
-  - Désactivé en fast_solve, poids configurables via soft_weights
+- 2026-02-18: **Contract-driven planning** — le moteur passe en mode contrat-principal
+  - hours_balancing désactivé par défaut (weight=0, code conservé)
+  - contract_target (weight=50) : pénalise uniquement le sous-contrat, pas le dépassement
+  - Formule slots : `contract_h × 60 / slot_min × (num_days / 7)` arrondi cohérent
+  - Sur-couverture autorisée (max_weekly_hours reste contrainte hard)
+  - Résultat mesuré 6×30 : chaque employé à ±0.1h de son quota, solve 2.6s, OPTIMAL, gap 0%
+  - 23/23 tests passent
 - 2026-02-18: Refonte contiguité v2 — Modélisation par blocs (SAT clauses + excess + hints)
   - Ancien : AddAbsEquality + IntVar diff → 12 000 vars, 12 000 contraintes contiguité, timeout
   - Nouveau : AddBoolOr (SAT clause) + excess IntVar + AddHint → 6 300 vars, 6 300 contraintes contiguité
