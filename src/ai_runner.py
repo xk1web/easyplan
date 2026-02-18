@@ -34,7 +34,10 @@ print("=" * 40)
 if "error" in result:
     print(f"Erreur solveur : {result['error']}")
 else:
-    for emp, planning in result["schedule"].items():
-        print(f"\n{emp} :")
-        for day, info in planning.items():
-            print(f"  {day} : {info['start']} → {info['end']} ({info['hours']}h)")
+    for emp, emp_data in result["schedule"].items():
+        print(f"\n{emp} (total: {emp_data['total_hours']}h) :")
+        for day, info in emp_data["days"].items():
+            ranges_str = ", ".join(
+                f"{r['start']}→{r['end']}" for r in info["ranges"]
+            )
+            print(f"  {day} : {ranges_str} ({info['hours']}h)")
