@@ -89,10 +89,15 @@ def add_contiguity_preference(model, x, num_employees, num_days, num_slots,
     penalties = []
     for e in range(num_employees):
         for d in range(num_days):
-            for s in range(num_slots - 1):
-                transition = model.NewBoolVar(f"trans_{e}_{d}_{s}")
-                diff = model.NewIntVar(-1, 1, f"diff_{e}_{d}_{s}")
-                model.Add(diff == x[(e, d, s)] - x[(e, d, s + 1)])
-                model.AddAbsEquality(transition, diff)
-                penalties.append((transition, weight))
+            gap_reopens = []
+            for s in range(1, num_slots):
+                sb = model.NewBoolVar(f"sb_{e}_{d}_{s}")
+                model.AddBoolOr([sb, x[(e, d, s)].Not(), x[(e, d, s - 1)]])
+                model.AddHint(sb, 0)
+                gap_reopens.append(sb)
+
+            excess = model.NewIntVar(0, num_slots, f"excess_{e}_{d}")
+            model.Add(excess >= x[(e, d, 0)] + sum(gap_reopens) - 1)
+            model.AddHint(excess, 0)
+            penalties.append((excess, weight))
     return penalties

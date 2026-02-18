@@ -151,9 +151,10 @@ python -m src.tests
   - 10 employés × 31 jours × 43 créneaux (slot 15min, 10h45 ouverture) = **13 330 variables booléennes**
 - Variables auxiliaires Phase 1 : E × W × jours/semaine pour day_worked (max 6j) = ~10 × 5 × 7 = 350
 - Variables auxiliaires Phase 2 : 2 × E = 20 (over/under mensuel, remplace l'ancien par semaine)
-- Variables auxiliaires contiguité : E × D × (S-1) ≈ 10 × 28 × 19 = 5 320 (désactivable via fast_solve)
-- **Total estimé avec slot 30min** : ~5 900 variables (mesuré), ~2 050 contraintes
-- **Total estimé avec slot 15min** : ~19 000 variables, ~6 000 contraintes
+- Variables auxiliaires contiguité (refonte blocs v2) : E × D × (S-1) BoolVar (gap_reopens) + E × D IntVar (excess) ≈ 10 × 30 × 20 + 300 = 6 300 (désactivable via fast_solve)
+- **Total estimé avec slot 30min, normal** : ~13 200 variables, ~9 130 contraintes (mesuré 10×30)
+- **Total estimé avec slot 30min, fast** : ~6 160 variables, ~2 570 contraintes (mesuré 10×28)
+- **Total estimé avec slot 15min** : ~19 000 variables, ~12 000 contraintes
 
 ### Complexité estimée
 - Complexité linéaire en nombre de jours : O(E × D × S)
@@ -164,28 +165,28 @@ python -m src.tests
 - Phase 4 (métriques) : lecture seule post-solve — O(1)
 - Phase 5 (safeguards) : vérification O(1), fast_solve réduit le modèle
 
-### Comportement attendu à 10 employés × 31 jours
-- Avec slot 30min, min_staff=2, fast_solve=true : résolution en **5-10 secondes** (mesuré : 6.8s pour 10×28)
-- Avec slot 15min, min_staff=2, fast_solve=false : résolution en **30-90 secondes** (contiguité coûteuse)
+### Comportement attendu à 10 employés × 30 jours
+- Avec slot 30min, min_staff=2, fast_solve=true : résolution en **5-7 secondes** (mesuré : 5.9s pour 10×28)
+- Avec slot 30min, min_staff=2, fast_solve=false (contiguité ON) : résolution en **~14 secondes** (mesuré : 14.2s pour 10×30, gap 1.21%)
 - Avec slot 15min, min_staff=2, fast_solve=true : résolution en **15-30 secondes**
-- Status OPTIMAL atteignable dans la plupart des cas avec max_time_seconds=60
+- Status OPTIMAL ou FEASIBLE (gap <2%) atteignable avec max_time_seconds=15
 
 ### Limites restantes
 1. **Repos 35h** : appliqué via contrainte sur triplets de jours (d, d+1, d+2) : si le gap spanning un jour off < 35h, le jour off ne peut pas être le jour de repos. Combiné avec max 6j/semaine, force au moins un bloc de repos >= 35h. N'utilise pas de fenêtre glissante de 7 jours.
 2. **Découpage semaines** : blocs fixes de 7 jours depuis le jour 0, ne tient pas compte du jour de la semaine réel (lundi, mardi, etc.)
 3. **Previous month stats** : mapping par nom d'employé. Les employés absents des stats précédentes ne sont pas ajustés.
-4. **Contiguité** : coûteuse en variables (E×D×(S-1) variables supplémentaires), fast_solve la désactive
+4. **Contiguité** : refonte v2 par blocs (SAT clauses + excess IntVar + hints), scalable à 10×30 en <15s, fast_solve la désactive
 5. **Pas de planification multi-mois** : chaque appel est indépendant, la continuité inter-mois passe uniquement par previous_month_stats
 6. **Slot 15min** : à 10 employés × 31 jours, le modèle contient ~19 000 variables — le solveur peut ne pas trouver l'optimal dans le timeout
 
 ### Temps solveur estimé
-| Scénario | Variables | Contraintes | Temps estimé |
-|----------|-----------|-------------|--------------|
-| 6 emp × 6j, slot 15min | ~1 600 | ~800 | <2s |
-| 10 emp × 28j, slot 30min, fast | ~5 900 | ~2 050 | ~7s |
-| 10 emp × 31j, slot 30min, fast | ~6 500 | ~2 300 | ~10s |
-| 10 emp × 28j, slot 15min, fast | ~12 500 | ~4 500 | ~20s |
-| 10 emp × 31j, slot 15min, normal | ~19 000 | ~6 000 | 30-90s |
+| Scénario | Variables | Contraintes | Temps estimé | Status |
+|----------|-----------|-------------|--------------|--------|
+| 6 emp × 6j, slot 15min | ~1 600 | ~800 | <2s | OPTIMAL |
+| 10 emp × 28j, slot 30min, fast | ~6 160 | ~2 570 | ~6s | OPTIMAL |
+| 10 emp × 30j, slot 30min, normal | ~13 200 | ~9 130 | ~14s | FEASIBLE (gap <2%) |
+| 10 emp × 28j, slot 15min, fast | ~12 500 | ~4 500 | ~20s | FEASIBLE |
+| 10 emp × 31j, slot 15min, normal | ~19 000 | ~12 000 | 30-60s | FEASIBLE |
 
 ## User Preferences
 - Méthode incrémentale stricte : une seule règle à la fois
@@ -195,6 +196,11 @@ python -m src.tests
 - Résumé après chaque étape
 
 ## Recent Changes
+- 2026-02-18: Refonte contiguité v2 — Modélisation par blocs (SAT clauses + excess + hints)
+  - Ancien : AddAbsEquality + IntVar diff → 12 000 vars, 12 000 contraintes contiguité, timeout
+  - Nouveau : AddBoolOr (SAT clause) + excess IntVar + AddHint → 6 300 vars, 6 300 contraintes contiguité
+  - Résultat mesuré 10×30 normal : 14.2s, FEASIBLE, gap 1.21%, max 3 plages/jour
+  - 22/22 tests passent
 - 2026-02-18: V2 — Implémentation 6 phases :
   - Phase 1 : Structuration hebdomadaire (get_weeks, max_weekly_hours par semaine, max 6j/semaine, repos 35h)
   - Phase 2 : Équité mensuelle (add_monthly_hours_balancing, 1 over/under par employé)
