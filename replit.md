@@ -1,20 +1,22 @@
-# Planning Engine — Moteur Métier
+# Planning Engine — Moteur Métier Optique
 
 ## Overview
 Moteur de génération de planning (Python + OR-Tools CP-SAT) pour magasins d'optique.
 Convention collective optique-lunetterie (IDCC 1431).
-Approche incrémentale : stabilisation heures → hard constraints → soft constraints → config.
+Approche incrémentale : stabilisation heures → hard constraints → soft constraints → config → validation légale.
 
 ## Project Architecture
 - `src/` — Source code directory
-- `src/validation.py` — Validation structurelle de faisabilité (heures disponibles vs requises)
-- `src/model_builder_v1.py` — Modèle CP-SAT avec reconstruction plages contigües + cohérence heures
-- `src/ai_runner.py` — Point d'entrée principal : pipeline validate → build → solve → return
-- `src/tests.py` — 7 tests automatisés (faisabilité + cohérence heures)
+- `src/model_builder_v1.py` — Modèle CP-SAT principal : variables, extraction résultats, plages contigües
+- `src/hard_constraints.py` — Contraintes dures : couverture, max hebdo/journalier, repos 11h, opticien diplômé, absences
+- `src/soft_constraints.py` — Contraintes souples : équilibrage heures, équité samedis, contiguité (transitions)
+- `src/validation.py` — Validation structurelle et légale (faisabilité, rôles, cohérence données)
+- `src/config.py` — Chargement config JSON hiérarchique avec valeurs par défaut
+- `src/ai_runner.py` — Point d'entrée principal : pipeline validate → build → solve → display
+- `src/tests.py` — 15 tests automatisés
 - `src/app.py` — Serveur HTTP (utilise ancien scheduler.py, non modifié)
 - `src/ai_client.py` — Configuration client OpenAI (non modifié)
 - `scheduler.py` — Ancien scheduler (conservé, non utilisé par V1)
-- `src/scheduler_v2.py` — Ancien scheduler V2 (conservé, non utilisé par V1)
 
 ## Schedule Output Schema (V1)
 ```json
@@ -36,24 +38,64 @@ Approche incrémentale : stabilisation heures → hard constraints → soft cons
 }
 ```
 
-## Pipeline V1
-1. `validate_global_feasibility` — vérifie A >= B avant solveur
-2. `build_and_solve_v1` — modèle CP-SAT avec hard constraints
-3. Extraction planning avec plages contigües + assertion cohérence interne
+## Configuration (JSON hiérarchique)
+```json
+{
+  "store_name": "MonMagasin",
+  "schedule": {
+    "start_time_minutes": 570,
+    "end_time_minutes": 1215,
+    "slot_minutes": 15,
+    "min_staff_per_slot": 1
+  },
+  "hard_constraints": {
+    "max_weekly_minutes": 2640,
+    "max_daily_minutes": 600,
+    "rest_between_days_minutes": 660,
+    "require_qualified_optician": true
+  },
+  "soft_weights": {
+    "hours_balancing": 10,
+    "saturday_fairness": 5,
+    "contiguity": 3
+  }
+}
+```
+Rétro-compatible avec format plat (clés à la racine).
 
-## Hard Constraints V1
+## Hard Constraints
 - Couverture minimale par créneau (min_staff_per_slot)
-- Somme heures employé <= heures contractuelles
-- Pas d'objectif d'optimisation (à venir étape 3)
+- Heures hebdo ≤ contrat (max_weekly_minutes)
+- Durée journalière ≤ 10h (max_daily_minutes, IDCC 1431)
+- Repos inter-journalier ≥ 11h (min_rest_between_days_minutes)
+- Présence opticien diplômé obligatoire (RULE 5.1)
+- Absences (journées complètes ou créneaux spécifiques)
 
-## Tests (7)
+## Soft Constraints (objectif pondéré)
+- Équilibrage heures entre employés (weight_balance)
+- Équité samedis (weight_saturday_fairness)
+- Contiguité plages horaires via pénalités de transition (weight_contiguity)
+
+## Validation Légale
+- Faisabilité structurelle (heures disponibles ≥ heures requises)
+- Cohérence données (longueurs employés/contrats/rôles)
+- Vérification présence opticien dans l'équipe
+- Contrats non négatifs
+- Capacité journalière suffisante
+
+## Tests (15)
 1. Cas faisable simple
 2. Cas impossible (A < B) → échec avant solveur
 3. Cas limite (A == B)
-4. Cohérence heures — 3 employés 5 jours
-5. Cohérence heures — 6 employés 6 jours contrats variés
-6. Cohérence heures — min_staff=2 + vérif contrat
-7. Cohérence heures — cas un seul créneau 15 min
+4-7. Cohérence heures (3 emp/5j, 6 emp/6j, min_staff=2, créneau unique)
+8. Repos 11h inter-journalier
+9. Durée max journalière 10h
+10. Présence opticien diplômé
+11. Contiguité des plages horaires
+12. Absence journée complète
+13. Absence créneau spécifique
+14. Validation : aucun opticien → rejet
+15. Validation : longueurs incohérentes → rejet
 
 ## Running
 ```bash
@@ -73,11 +115,12 @@ cd src && python tests.py
 - Résumé après chaque étape
 
 ## Recent Changes
+- 2026-02-18: Étape 6 — Validation légale enrichie
+  - validate_global_feasibility étendu : rôles, cohérence longueurs, contrats négatifs, capacité
+  - 2 nouveaux tests (14-15), 15/15 passent
+- 2026-02-18: Étape 5 — Absences (journées complètes + créneaux)
+- 2026-02-18: Étape 4 — Config JSON hiérarchique, poids paramétrables
+- 2026-02-18: Étape 2-3 — Hard + soft constraints, objectif pondéré
 - 2026-02-18: Étape 1 — Cohérence heures stabilisée
-  - Reconstruction plages contigües (pas min/max)
-  - Assertion interne model_hours == display_hours
-  - total_hours par employé
-  - 4 nouveaux tests de cohérence (tests 4-7)
-  - Schema schedule changé : schedule[emp]["days"][day] au lieu de schedule[emp][day]
-- 2026-02-17: Stabilisation V1 minimale — validation.py, model_builder_v1.py, pipeline propre, 3 tests
-- 2026-02-15: Initial project setup with basic HTTP server
+- 2026-02-17: Stabilisation V1 minimale
+- 2026-02-15: Initial project setup

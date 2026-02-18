@@ -1,5 +1,12 @@
 from typing import List, Dict, Optional
 from ortools.sat.python import cp_model
+from hard_constraints import (
+    add_min_coverage, add_max_weekly_hours, add_max_daily_hours,
+    add_qualified_optician_coverage, add_unavailabilities, add_rest_between_days
+)
+from soft_constraints import (
+    add_hours_balancing, add_saturday_fairness, add_contiguity_preference
+)
 
 
 def _minutes_to_hhmm(minutes: int) -> str:
@@ -55,14 +62,30 @@ def build_and_solve_v1(
     employees: List[str],
     days: List[str],
     contracts: List[int],
-    config: dict
+    config: dict,
+    roles: Optional[List[str]] = None,
+    unavailabilities: Optional[List] = None
 ) -> Dict:
     model = cp_model.CpModel()
 
-    slot_minutes = 15
-    start_time_minutes = config.get("start_time_minutes", 9 * 60 + 30)
-    end_time_minutes = config.get("end_time_minutes", 20 * 60 + 15)
-    min_staff = config.get("min_staff_per_slot", 1)
+    sched = config.get("schedule", config)
+    slot_minutes = sched.get("slot_minutes", 15)
+    start_time_minutes = sched.get("start_time_minutes", 9 * 60 + 30)
+    end_time_minutes = sched.get("end_time_minutes", 20 * 60 + 15)
+    min_staff = sched.get("min_staff_per_slot", 1)
+
+    hard = config.get("hard_constraints", {})
+    max_daily_min = hard.get("max_daily_minutes", 600)
+    rest_min = hard.get("rest_between_days_minutes", 660)
+    require_optician = hard.get("require_qualified_optician", True)
+
+    weights = config.get("soft_weights", {})
+    w_balance = weights.get("hours_balancing", 10)
+    w_saturday = weights.get("saturday_fairness", 5)
+    w_contiguity = weights.get("contiguity", 3)
+
+    solver_cfg = config.get("solver", {})
+    max_time = solver_cfg.get("max_time_seconds", 30)
 
     num_slots = (end_time_minutes - start_time_minutes) // slot_minutes
     num_employees = len(employees)
@@ -74,23 +97,42 @@ def build_and_solve_v1(
             for s in range(num_slots):
                 x[(e, d, s)] = model.NewBoolVar(f"x_{e}_{d}_{s}")
 
-    for d in range(num_days):
-        for s in range(num_slots):
-            model.Add(
-                sum(x[(e, d, s)] for e in range(num_employees)) >= min_staff
-            )
+    add_min_coverage(model, x, num_employees, num_days, num_slots, min_staff)
+    if hard.get("max_weekly_hours", True):
+        add_max_weekly_hours(model, x, num_employees, num_days, num_slots, contracts, slot_minutes)
+    add_max_daily_hours(model, x, num_employees, num_days, num_slots, slot_minutes,
+                        max_daily_minutes=max_daily_min)
+    if require_optician and roles is not None:
+        add_qualified_optician_coverage(model, x, num_employees, num_days, num_slots, roles)
+    if unavailabilities:
+        add_unavailabilities(model, x, unavailabilities, num_slots)
+    add_rest_between_days(model, x, num_employees, num_days, num_slots,
+                          start_time_minutes, slot_minutes, rest_minutes=rest_min)
 
-    for e in range(num_employees):
-        total_slots = sum(
-            x[(e, d, s)]
-            for d in range(num_days)
-            for s in range(num_slots)
+    all_penalties = []
+    if w_balance > 0:
+        all_penalties.extend(
+            add_hours_balancing(model, x, num_employees, num_days, num_slots,
+                                contracts, slot_minutes, weight=w_balance)
         )
-        max_slots = contracts[e] * 60 // slot_minutes
-        model.Add(total_slots <= max_slots)
+    if w_saturday > 0:
+        all_penalties.extend(
+            add_saturday_fairness(model, x, num_employees, num_days, num_slots,
+                                  days, slot_minutes, weight=w_saturday)
+        )
+    if w_contiguity > 0:
+        all_penalties.extend(
+            add_contiguity_preference(model, x, num_employees, num_days, num_slots,
+                                      slot_minutes, weight=w_contiguity)
+        )
+
+    if all_penalties:
+        model.Minimize(
+            sum(var * w for var, w in all_penalties)
+        )
 
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 30
+    solver.parameters.max_time_in_seconds = max_time
     status = solver.Solve(model)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
