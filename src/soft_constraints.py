@@ -85,18 +85,16 @@ def add_saturday_fairness(model, x, num_employees, num_days, num_slots,
 
 
 def add_contract_target_penalty(model, x, num_employees, num_days, num_slots,
-                                contracts, slot_minutes, weight_under=8,
-                                weight_over=12):
+                                contracts, slot_minutes, weight=50,
+                                weight_under=None, weight_over=None):
     penalties = []
-
-    weeks_in_period = max(num_days / 7.0, 1.0)
 
     for e in range(num_employees):
         if contracts[e] <= 0:
             continue
 
-        target_slots = int(round(contracts[e] * 60 / slot_minutes * weeks_in_period))
-        target_slots = min(target_slots, num_days * num_slots)
+        contract_slots_e = int(round(contracts[e] * 60 / slot_minutes * (num_days / 7.0)))
+        contract_slots_e = min(contract_slots_e, num_days * num_slots)
 
         emp_slots = sum(
             x[(e, d, s)]
@@ -104,12 +102,10 @@ def add_contract_target_penalty(model, x, num_employees, num_days, num_slots,
             for s in range(num_slots)
         )
 
-        over = model.NewIntVar(0, num_days * num_slots, f"contract_over_{e}")
         under = model.NewIntVar(0, num_days * num_slots, f"contract_under_{e}")
-        model.Add(emp_slots - target_slots == over - under)
+        model.Add(under >= contract_slots_e - emp_slots)
 
-        penalties.append((over, weight_over))
-        penalties.append((under, weight_under))
+        penalties.append((under, weight))
 
     return penalties
 

@@ -18,11 +18,10 @@ DEFAULT_CONFIG = {
         "require_qualified_optician": True
     },
     "soft_weights": {
-        "hours_balancing": 10,
+        "hours_balancing": 0,
         "saturday_fairness": 5,
         "contiguity": 3,
-        "contract_target_under": 8,
-        "contract_target_over": 12
+        "contract_target": 50
     },
     "solver": {
         "max_time_seconds": 30
