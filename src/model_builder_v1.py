@@ -9,10 +9,26 @@ from src.hard_constraints import (
 )
 from src.soft_constraints import (
     add_monthly_hours_balancing, add_saturday_fairness, add_contiguity_preference,
-    add_contract_target_penalty
+    add_contract_target_penalty, add_weekly_hours_fairness, add_close_fairness,
+    add_amplitude_fairness
 )
 
 logger = logging.getLogger(__name__)
+TARGET_OBJECTIVE = 42  # seuil cible empirique
+
+
+class EarlyStopCallback(cp_model.CpSolverSolutionCallback):
+    def __init__(self, target):
+        super().__init__()
+        self.target = target
+        self.best = float("inf")
+
+    def on_solution_callback(self):
+        current = self.ObjectiveValue()
+        if current < self.best:
+            self.best = current
+        if current <= self.target:
+            self.StopSearch()
 
 
 def _minutes_to_hhmm(minutes: int) -> str:
@@ -89,6 +105,7 @@ def build_and_solve_v1(
     start_time_minutes = sched.get("start_time_minutes", 9 * 60 + 30)
     end_time_minutes = sched.get("end_time_minutes", 20 * 60 + 15)
     min_staff = sched.get("min_staff_per_slot", 1)
+    min_staff_per_day = sched.get("min_staff_per_day")
 
     hard = config.get("hard_constraints", {})
     max_daily_min = hard.get("max_daily_minutes", 600)
@@ -96,6 +113,13 @@ def build_and_solve_v1(
     require_optician = hard.get("require_qualified_optician", True)
     max_days_week = hard.get("max_days_per_week", 6)
     weekly_rest_min = hard.get("weekly_rest_minutes", 2100)
+    contract_mode = hard.get("contract_hours_mode", "soft")
+    if hard.get("contract_hours_hard", False):
+        contract_mode = "hard"
+    if contract_mode not in ("hard", "soft", "off"):
+        contract_mode = "soft"
+    contract_tolerance_slots = hard.get("contract_hours_tolerance_slots", 0)
+    contract_overtime_slots = hard.get("contract_overtime_slots", 0)
 
     weights = config.get("soft_weights", {})
     fast_solve = config.get("fast_solve", False)
@@ -104,6 +128,14 @@ def build_and_solve_v1(
     w_saturday = 0 if fast_solve else weights.get("saturday_fairness", 5)
     w_contiguity = 0 if fast_solve else weights.get("contiguity", 3)
     w_contract_target = 0 if fast_solve else weights.get("contract_target", 50)
+    w_contract_under = weights.get("contract_target_under")
+    w_contract_over = weights.get("contract_target_over")
+    w_contract_overtime = 0 if fast_solve else weights.get("contract_overtime_penalty", 0)
+    w_weekly_fairness = 0 if fast_solve else weights.get("weekly_hours_fairness", 0)
+    w_close_fairness = 0 if fast_solve else weights.get("close_fairness", 0)
+    w_amplitude_fairness = 0 if fast_solve else weights.get("amplitude_fairness", 0)
+    if contract_mode == "off":
+        w_contract_target = 0
 
     long_term_weight = config.get("long_term_equity_weight", 0.0)
 
@@ -118,7 +150,10 @@ def build_and_solve_v1(
             for s in range(num_slots):
                 x[(e, d, s)] = model.NewBoolVar(f"x_{e}_{d}_{s}")
 
-    add_min_coverage(model, x, num_employees, num_days, num_slots, min_staff)
+    if isinstance(min_staff_per_day, (list, tuple)) and len(min_staff_per_day) == num_days:
+        add_min_coverage(model, x, num_employees, num_days, num_slots, min_staff_per_day)
+    else:
+        add_min_coverage(model, x, num_employees, num_days, num_slots, min_staff)
     if hard.get("max_weekly_hours", True):
         add_max_weekly_hours(model, x, num_employees, num_days, num_slots, contracts, slot_minutes)
     add_max_daily_hours(model, x, num_employees, num_days, num_slots, slot_minutes,
@@ -138,34 +173,105 @@ def build_and_solve_v1(
         add_weekly_rest_35h(model, x, num_employees, num_days, num_slots,
                             start_time_minutes, slot_minutes, rest_minutes=weekly_rest_min)
 
+    overtime_penalties = []
+    if contract_mode == "hard":
+        # Contrats stricts par semaine complète + plage pour semaine partielle
+        # Semaines complètes: somme == H_e
+        # Semaine partielle: somme ∈ [floor(k/7 * H_e), ceil(k/7 * H_e)]
+        weeks = []
+        start = 0
+        while start < num_days:
+            end = min(start + 7, num_days)
+            weeks.append(list(range(start, end)))
+            start = end
+        for e in range(num_employees):
+            weekly_target_slots = contracts[e] * 60 / slot_minutes
+            for w_idx, week_days in enumerate(weeks):
+                week_slots = sum(
+                    x[(e, d, s)]
+                    for d in week_days
+                    for s in range(num_slots)
+                )
+                if len(week_days) == 7:
+                    min_slots = int(weekly_target_slots // 1)
+                    max_slots = int(-(-weekly_target_slots // 1))
+                    if min_slots == max_slots:
+                        if contract_overtime_slots and contract_overtime_slots > 0:
+                            overtime = model.NewIntVar(0, contract_overtime_slots, f"overtime_{e}_{w_idx}")
+                            model.Add(week_slots == min_slots + overtime)
+                            overtime_penalties.append(overtime)
+                        else:
+                            model.Add(week_slots == min_slots)
+                    else:
+                        model.Add(week_slots >= min_slots)
+                        if contract_overtime_slots and contract_overtime_slots > 0:
+                            overtime = model.NewIntVar(0, contract_overtime_slots, f"overtime_{e}_{w_idx}")
+                            model.Add(week_slots <= max_slots + overtime)
+                            overtime_penalties.append(overtime)
+                        else:
+                            model.Add(week_slots <= max_slots)
+                else:
+                    partial_target = weekly_target_slots * (len(week_days) / 7.0)
+                    min_slots = int(partial_target // 1)
+                    max_slots = int(-(-partial_target // 1))
+                    model.Add(week_slots >= min_slots)
+                    model.Add(week_slots <= max_slots)
+
+    if contract_mode == "hard":
+        w_balance = 0
+        w_contract_target = 0
+
     all_penalties = []
+    penalty_groups = {}
     if w_balance > 0:
-        all_penalties.extend(
-            add_monthly_hours_balancing(model, x, num_employees, num_days, num_slots,
-                                        contracts, slot_minutes, weight=w_balance,
-                                        previous_month_stats=previous_month_stats,
-                                        long_term_equity_weight=long_term_weight,
-                                        employees=employees)
-        )
+        penalties = add_monthly_hours_balancing(model, x, num_employees, num_days, num_slots,
+                                                contracts, slot_minutes, weight=w_balance,
+                                                previous_month_stats=previous_month_stats,
+                                                long_term_equity_weight=long_term_weight,
+                                                employees=employees)
+        all_penalties.extend(penalties)
+        penalty_groups["monthly_hours_balancing"] = penalties
     if w_saturday > 0:
-        all_penalties.extend(
-            add_saturday_fairness(model, x, num_employees, num_days, num_slots,
-                                  days, slot_minutes, weight=w_saturday,
-                                  previous_month_stats=previous_month_stats,
-                                  long_term_equity_weight=long_term_weight,
-                                  employees=employees)
-        )
+        penalties = add_saturday_fairness(model, x, num_employees, num_days, num_slots,
+                                          days, slot_minutes, weight=w_saturday,
+                                          previous_month_stats=previous_month_stats,
+                                          long_term_equity_weight=long_term_weight,
+                                          employees=employees)
+        all_penalties.extend(penalties)
+        penalty_groups["saturday_fairness"] = penalties
     if w_contiguity > 0:
-        all_penalties.extend(
-            add_contiguity_preference(model, x, num_employees, num_days, num_slots,
-                                      slot_minutes, weight=w_contiguity)
-        )
+        penalties = add_contiguity_preference(model, x, num_employees, num_days, num_slots,
+                                              slot_minutes, weight=w_contiguity)
+        all_penalties.extend(penalties)
+        penalty_groups["contiguity"] = penalties
     if w_contract_target > 0:
-        all_penalties.extend(
-            add_contract_target_penalty(model, x, num_employees, num_days, num_slots,
-                                        contracts, slot_minutes,
-                                        weight=w_contract_target)
-        )
+        penalties = add_contract_target_penalty(model, x, num_employees, num_days, num_slots,
+                                                contracts, slot_minutes,
+                                                weight=w_contract_target,
+                                                weight_under=w_contract_under,
+                                                weight_over=w_contract_over)
+        all_penalties.extend(penalties)
+        penalty_groups["contract_target"] = penalties
+    if overtime_penalties and w_contract_overtime > 0:
+        penalties = [(o, w_contract_overtime) for o in overtime_penalties]
+        all_penalties.extend(penalties)
+        penalty_groups["overtime_penalty"] = penalties
+    if w_weekly_fairness > 0:
+        penalties = add_weekly_hours_fairness(model, x, num_employees, num_days, num_slots,
+                                              contracts, slot_minutes,
+                                              weight=w_weekly_fairness)
+        all_penalties.extend(penalties)
+        penalty_groups["weekly_hours_fairness"] = penalties
+    if w_close_fairness > 0:
+        penalties = add_close_fairness(model, x, num_employees, num_days, num_slots,
+                                       weight=w_close_fairness)
+        all_penalties.extend(penalties)
+        penalty_groups["close_fairness"] = penalties
+    if w_amplitude_fairness > 0:
+        penalties = add_amplitude_fairness(model, x, num_employees, num_days, num_slots,
+                                           weight=w_amplitude_fairness)
+        all_penalties.extend(penalties)
+        penalty_groups["amplitude_fairness"] = penalties
 
     if all_penalties:
         model.Minimize(
@@ -179,9 +285,13 @@ def build_and_solve_v1(
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = max_time
+    solver.parameters.num_search_workers = 1
+    solver.parameters.random_seed = 42
+    solver.parameters.log_search_progress = False
 
     t0 = time.time()
-    status = solver.Solve(model)
+    callback = EarlyStopCallback(TARGET_OBJECTIVE)
+    status = solver.SolveWithSolutionCallback(model, callback)
     solver_wall_time = round(time.time() - t0, 3)
 
     status_name = {
@@ -193,6 +303,7 @@ def build_and_solve_v1(
     }.get(status, "UNKNOWN")
 
     gap = None
+    obj_val = None
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         obj_val = solver.ObjectiveValue()
         best_bound = solver.BestObjectiveBound()
@@ -201,12 +312,30 @@ def build_and_solve_v1(
         else:
             gap = 0.0
 
+    overtime_used_slots = None
+    if overtime_penalties and status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        overtime_used_slots = sum(solver.Value(o) for o in overtime_penalties)
+
+    objective_breakdown = None
+    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE) and penalty_groups:
+        objective_breakdown = {}
+        for name, penalties in penalty_groups.items():
+            if not penalties:
+                continue
+            total = 0.0
+            for var, weight in penalties:
+                total += solver.Value(var) * weight
+            objective_breakdown[name] = total
+
     metrics = {
         "num_variables": num_variables,
         "num_constraints": num_constraints,
         "solver_wall_time": solver_wall_time,
         "solver_status": status_name,
         "gap_percent": gap,
+        "total_overtime_used_slots": overtime_used_slots,
+        "objective_value": obj_val,
+        "objective_breakdown": objective_breakdown,
     }
 
     if warnings:

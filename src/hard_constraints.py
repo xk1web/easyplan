@@ -12,10 +12,12 @@ def get_weeks(num_days):
 
 
 def add_min_coverage(model, x, num_employees, num_days, num_slots, min_staff):
+    is_list = isinstance(min_staff, (list, tuple))
     for d in range(num_days):
+        required = min_staff[d] if is_list else min_staff
         for s in range(num_slots):
             model.Add(
-                sum(x[(e, d, s)] for e in range(num_employees)) >= min_staff
+                sum(x[(e, d, s)] for e in range(num_employees)) >= required
             )
 
 
@@ -46,27 +48,59 @@ def add_max_days_per_week(model, x, num_employees, num_days, num_slots, max_days
             model.Add(sum(day_worked_vars) <= max_days)
 
 
+def _build_prefix_sums(model, x, e, d, num_slots, name_prefix):
+    prefix = []
+    for s in range(num_slots):
+        p = model.NewIntVar(0, num_slots, f"{name_prefix}_{e}_{d}_{s}")
+        if s == 0:
+            model.Add(p == x[(e, d, s)])
+        else:
+            model.Add(p == prefix[s - 1] + x[(e, d, s)])
+        prefix.append(p)
+    return prefix
+
+
 def add_weekly_rest_35h(model, x, num_employees, num_days, num_slots,
                         start_time_minutes, slot_minutes, rest_minutes=2100):
+    if rest_minutes <= 0:
+        return
+
+    prefix_cache = {}
+
+    def get_prefix(e, d):
+        key = (e, d)
+        if key not in prefix_cache:
+            prefix_cache[key] = _build_prefix_sums(
+                model, x, e, d, num_slots, "pref_weekly_rest"
+            )
+        return prefix_cache[key]
+
     for e in range(num_employees):
         for d in range(num_days - 2):
             d_mid = d + 1
             d_after = d + 2
+
             has_work_mid = model.NewBoolVar(f"work_mid_{e}_{d_mid}")
             mid_slots = sum(x[(e, d_mid, s)] for s in range(num_slots))
             model.Add(mid_slots >= 1).OnlyEnforceIf(has_work_mid)
             model.Add(mid_slots == 0).OnlyEnforceIf(has_work_mid.Not())
+
+            prefix_after = get_prefix(e, d_after)
+
             for s_end in range(num_slots):
                 end_minutes = start_time_minutes + (s_end + 1) * slot_minutes
-                for s_start in range(num_slots):
-                    start_next = start_time_minutes + s_start * slot_minutes
-                    gap = (24 * 60 - end_minutes) + 24 * 60 + start_next
-                    if gap < rest_minutes:
-                        model.AddBoolOr([
-                            x[(e, d, s_end)].Not(),
-                            x[(e, d_after, s_start)].Not(),
-                            has_work_mid
-                        ])
+                needed = rest_minutes - (48 * 60 - end_minutes) - start_time_minutes
+                if needed <= 0:
+                    continue
+                earliest_slot = (needed + slot_minutes - 1) // slot_minutes
+                if earliest_slot <= 0:
+                    continue
+                t = earliest_slot - 1
+                if t >= num_slots:
+                    t = num_slots - 1
+                model.Add(prefix_after[t] == 0).OnlyEnforceIf(
+                    [x[(e, d, s_end)], has_work_mid.Not()]
+                )
 
 
 def add_min_daily_work_duration(model, x, num_employees, num_days, num_slots,
@@ -116,15 +150,31 @@ def add_unavailabilities(model, x, unavailabilities, num_slots):
 
 def add_rest_between_days(model, x, num_employees, num_days, num_slots,
                           start_time_minutes, slot_minutes, rest_minutes=660):
+    if rest_minutes <= 0:
+        return
+
+    prefix_cache = {}
+
+    def get_prefix(e, d):
+        key = (e, d)
+        if key not in prefix_cache:
+            prefix_cache[key] = _build_prefix_sums(
+                model, x, e, d, num_slots, "pref_daily_rest"
+            )
+        return prefix_cache[key]
+
     for e in range(num_employees):
         for d in range(num_days - 1):
+            prefix_next = get_prefix(e, d + 1)
             for s_end in range(num_slots):
                 end_minutes = start_time_minutes + (s_end + 1) * slot_minutes
-                for s_start in range(num_slots):
-                    start_next = start_time_minutes + s_start * slot_minutes
-                    gap = (24 * 60 - end_minutes) + start_next
-                    if gap < rest_minutes:
-                        model.AddBoolOr([
-                            x[(e, d, s_end)].Not(),
-                            x[(e, d + 1, s_start)].Not()
-                        ])
+                needed = rest_minutes - (24 * 60 - end_minutes) - start_time_minutes
+                if needed <= 0:
+                    continue
+                earliest_slot = (needed + slot_minutes - 1) // slot_minutes
+                if earliest_slot <= 0:
+                    continue
+                t = earliest_slot - 1
+                if t >= num_slots:
+                    t = num_slots - 1
+                model.Add(prefix_next[t] == 0).OnlyEnforceIf(x[(e, d, s_end)])
