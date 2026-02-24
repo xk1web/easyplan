@@ -291,7 +291,7 @@ def build_and_solve_v1(
 
     t0 = time.time()
     callback = EarlyStopCallback(TARGET_OBJECTIVE)
-    status = solver.SolveWithSolutionCallback(model, callback)
+    status = solver.Solve(model, callback)
     solver_wall_time = round(time.time() - t0, 3)
 
     status_name = {
