@@ -10,7 +10,8 @@ from src.hard_constraints import (
 from src.soft_constraints import (
     add_monthly_hours_balancing, add_saturday_fairness, add_contiguity_preference,
     add_contract_target_penalty, add_weekly_hours_fairness, add_close_fairness,
-    add_amplitude_fairness
+    add_amplitude_fairness, add_max_daily_hours_penalty, add_overstaffing_penalty,
+    add_target_staffing_penalty, add_internal_hours_penalty
 )
 
 logger = logging.getLogger(__name__)
@@ -104,7 +105,9 @@ def build_and_solve_v1(
     slot_minutes = sched.get("slot_minutes", 15)
     start_time_minutes = sched.get("start_time_minutes", 9 * 60 + 30)
     end_time_minutes = sched.get("end_time_minutes", 20 * 60 + 15)
-    min_staff = sched.get("min_staff_per_slot", 1)
+    staffing = config.get("staffing", {})
+    min_staff = staffing.get("min_staff_per_slot", sched.get("min_staff_per_slot", 1))
+    target_staff = staffing.get("target_staff_per_slot", min_staff)
     min_staff_per_day = sched.get("min_staff_per_day")
 
     hard = config.get("hard_constraints", {})
@@ -134,6 +137,10 @@ def build_and_solve_v1(
     w_weekly_fairness = 0 if fast_solve else weights.get("weekly_hours_fairness", 0)
     w_close_fairness = 0 if fast_solve else weights.get("close_fairness", 0)
     w_amplitude_fairness = 0 if fast_solve else weights.get("amplitude_fairness", 0)
+    w_max_daily_penalty = 0 if fast_solve else weights.get("max_daily_hours_penalty", 20)
+    w_target_staffing_penalty = 0 if fast_solve else weights.get("target_staffing_penalty", 5)
+    w_overstaffing_penalty = 0 if fast_solve else weights.get("overstaffing_penalty", 1)
+    w_internal_hours_penalty = 0 if fast_solve else weights.get("internal_hours_penalty", 1)
     if contract_mode == "off":
         w_contract_target = 0
 
@@ -150,14 +157,23 @@ def build_and_solve_v1(
             for s in range(num_slots):
                 x[(e, d, s)] = model.NewBoolVar(f"x_{e}_{d}_{s}")
 
+    internal = {}
+    worked = {}
+    for e in range(num_employees):
+        for d in range(num_days):
+            for s in range(num_slots):
+                internal[(e, d, s)] = model.NewBoolVar(f"internal_{e}_{d}_{s}")
+                model.Add(x[(e, d, s)] + internal[(e, d, s)] <= 1)
+                worked[(e, d, s)] = model.NewBoolVar(f"worked_{e}_{d}_{s}")
+                model.Add(worked[(e, d, s)] == x[(e, d, s)] + internal[(e, d, s)])
+
     if isinstance(min_staff_per_day, (list, tuple)) and len(min_staff_per_day) == num_days:
         add_min_coverage(model, x, num_employees, num_days, num_slots, min_staff_per_day)
     else:
         add_min_coverage(model, x, num_employees, num_days, num_slots, min_staff)
     if hard.get("max_weekly_hours", True):
-        add_max_weekly_hours(model, x, num_employees, num_days, num_slots, contracts, slot_minutes)
-    add_max_daily_hours(model, x, num_employees, num_days, num_slots, slot_minutes,
-                        max_daily_minutes=max_daily_min)
+        add_max_weekly_hours(model, x, num_employees, num_days, num_slots, contracts, slot_minutes, internal=internal)
+    # max_daily_hours is now a soft constraint (penalized in objective)
     min_daily_min = hard.get("min_daily_minutes", 0)
     if min_daily_min > 0:
         add_min_daily_work_duration(model, x, num_employees, num_days, num_slots,
@@ -166,7 +182,7 @@ def build_and_solve_v1(
     if require_optician and roles is not None:
         add_qualified_optician_coverage(model, x, num_employees, num_days, num_slots, roles)
     if unavailabilities:
-        add_unavailabilities(model, x, unavailabilities, num_slots)
+        add_unavailabilities(model, x, unavailabilities, num_slots, internal=internal)
     add_rest_between_days(model, x, num_employees, num_days, num_slots,
                           start_time_minutes, slot_minutes, rest_minutes=rest_min)
     if weekly_rest_min > 0 and num_days >= 3:
@@ -222,14 +238,16 @@ def build_and_solve_v1(
         w_contract_target = 0
 
     all_penalties = []
+    phase2_penalties = []
     penalty_groups = {}
     if w_balance > 0:
         penalties = add_monthly_hours_balancing(model, x, num_employees, num_days, num_slots,
                                                 contracts, slot_minutes, weight=w_balance,
                                                 previous_month_stats=previous_month_stats,
                                                 long_term_equity_weight=long_term_weight,
-                                                employees=employees)
+                                                employees=employees, internal=internal)
         all_penalties.extend(penalties)
+        phase2_penalties.extend(penalties)
         penalty_groups["monthly_hours_balancing"] = penalties
     if w_saturday > 0:
         penalties = add_saturday_fairness(model, x, num_employees, num_days, num_slots,
@@ -238,61 +256,136 @@ def build_and_solve_v1(
                                           long_term_equity_weight=long_term_weight,
                                           employees=employees)
         all_penalties.extend(penalties)
+        phase2_penalties.extend(penalties)
         penalty_groups["saturday_fairness"] = penalties
     if w_contiguity > 0:
-        penalties = add_contiguity_preference(model, x, num_employees, num_days, num_slots,
+        penalties = add_contiguity_preference(model, worked, num_employees, num_days, num_slots,
                                               slot_minutes, weight=w_contiguity)
         all_penalties.extend(penalties)
+        phase2_penalties.extend(penalties)
         penalty_groups["contiguity"] = penalties
+    contract_deviation_terms = []
     if w_contract_target > 0:
-        penalties = add_contract_target_penalty(model, x, num_employees, num_days, num_slots,
-                                                contracts, slot_minutes,
-                                                weight=w_contract_target,
-                                                weight_under=w_contract_under,
-                                                weight_over=w_contract_over)
+        penalties, deviation_terms = add_contract_target_penalty(
+            model, x, num_employees, num_days, num_slots,
+            contracts, slot_minutes,
+            weight=w_contract_target,
+            weight_under=w_contract_under,
+            weight_over=w_contract_over,
+            internal=internal,
+        )
         all_penalties.extend(penalties)
         penalty_groups["contract_target"] = penalties
+        contract_deviation_terms = deviation_terms
+    if w_target_staffing_penalty > 0 and target_staff > min_staff:
+        penalties = add_target_staffing_penalty(model, x, num_employees, num_days, num_slots,
+                                                target_staff, weight=w_target_staffing_penalty)
+        all_penalties.extend(penalties)
+        phase2_penalties.extend(penalties)
+        penalty_groups["target_staffing"] = penalties
+    if w_overstaffing_penalty > 0:
+        penalties = add_overstaffing_penalty(model, x, num_employees, num_days, num_slots,
+                                             min_staff, min_staff_per_day,
+                                             weight=w_overstaffing_penalty)
+        all_penalties.extend(penalties)
+        phase2_penalties.extend(penalties)
+        penalty_groups["overstaffing"] = penalties
+    if w_internal_hours_penalty > 0:
+        penalties = add_internal_hours_penalty(
+            model, internal, num_employees, num_days, num_slots, weight=w_internal_hours_penalty
+        )
+        all_penalties.extend(penalties)
+        phase2_penalties.extend(penalties)
+        penalty_groups["internal_hours"] = penalties
+    if w_max_daily_penalty > 0:
+        penalties = add_max_daily_hours_penalty(model, x, num_employees, num_days, num_slots,
+                                                slot_minutes,
+                                                max_daily_minutes=max_daily_min,
+                                                weight=w_max_daily_penalty,
+                                                internal=internal)
+        all_penalties.extend(penalties)
+        phase2_penalties.extend(penalties)
+        penalty_groups["max_daily_hours"] = penalties
     if overtime_penalties and w_contract_overtime > 0:
         penalties = [(o, w_contract_overtime) for o in overtime_penalties]
         all_penalties.extend(penalties)
+        phase2_penalties.extend(penalties)
         penalty_groups["overtime_penalty"] = penalties
     if w_weekly_fairness > 0:
         penalties = add_weekly_hours_fairness(model, x, num_employees, num_days, num_slots,
                                               contracts, slot_minutes,
-                                              weight=w_weekly_fairness)
+                                              weight=w_weekly_fairness,
+                                              internal=internal)
         all_penalties.extend(penalties)
+        phase2_penalties.extend(penalties)
         penalty_groups["weekly_hours_fairness"] = penalties
     if w_close_fairness > 0:
         penalties = add_close_fairness(model, x, num_employees, num_days, num_slots,
                                        weight=w_close_fairness)
         all_penalties.extend(penalties)
+        phase2_penalties.extend(penalties)
         penalty_groups["close_fairness"] = penalties
     if w_amplitude_fairness > 0:
         penalties = add_amplitude_fairness(model, x, num_employees, num_days, num_slots,
                                            weight=w_amplitude_fairness)
         all_penalties.extend(penalties)
+        phase2_penalties.extend(penalties)
         penalty_groups["amplitude_fairness"] = penalties
 
-    if all_penalties:
-        model.Minimize(
-            sum(var * w for var, w in all_penalties)
-        )
+    total_contract_deviation = model.NewIntVar(
+        0, num_employees * num_days * num_slots, "total_contract_deviation"
+    )
+    if contract_deviation_terms:
+        model.Add(total_contract_deviation == sum(contract_deviation_terms))
+    else:
+        model.Add(total_contract_deviation == 0)
 
     num_variables = model.Proto().variables.__len__()
     num_constraints = len(model.Proto().constraints)
 
     logger.info(f"Model: {num_variables} variables, {num_constraints} constraints")
 
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = max_time
-    solver.parameters.num_search_workers = 1
-    solver.parameters.random_seed = 42
-    solver.parameters.log_search_progress = False
+    def build_solver():
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = max_time
+        solver.parameters.num_search_workers = 1
+        solver.parameters.random_seed = 42
+        solver.parameters.log_search_progress = False
+        return solver
 
-    t0 = time.time()
-    callback = EarlyStopCallback(TARGET_OBJECTIVE)
-    status = solver.Solve(model, callback)
-    solver_wall_time = round(time.time() - t0, 3)
+    status = cp_model.UNKNOWN
+    solver_wall_time = 0.0
+
+    if contract_mode != "off":
+        model.Minimize(total_contract_deviation)
+        solver_phase1 = build_solver()
+        t0 = time.time()
+        status_phase1 = solver_phase1.Solve(model)
+        solver_wall_time = round(time.time() - t0, 3)
+
+        if status_phase1 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            best_deviation = solver_phase1.Value(total_contract_deviation)
+            model.Add(total_contract_deviation == best_deviation)
+            if phase2_penalties:
+                model.Minimize(sum(var * w for var, w in phase2_penalties))
+            else:
+                model.Minimize(0)
+            solver = build_solver()
+            t0 = time.time()
+            status = solver.Solve(model)
+            solver_wall_time = round(time.time() - t0, 3)
+        else:
+            solver = solver_phase1
+            status = status_phase1
+    else:
+        if all_penalties:
+            model.Minimize(sum(var * w for var, w in all_penalties))
+        else:
+            model.Minimize(0)
+        solver = build_solver()
+        t0 = time.time()
+        status = solver.Solve(model)
+        solver_wall_time = round(time.time() - t0, 3)
 
     status_name = {
         cp_model.OPTIMAL: "OPTIMAL",
@@ -316,6 +409,12 @@ def build_and_solve_v1(
     if overtime_penalties and status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         overtime_used_slots = sum(solver.Value(o) for o in overtime_penalties)
 
+    internal_used_slots = None
+    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        internal_used_slots = sum(solver.Value(v) for v in internal.values())
+        if internal_used_slots is not None:
+            internal_used_slots = int(internal_used_slots)
+
     objective_breakdown = None
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE) and penalty_groups:
         objective_breakdown = {}
@@ -334,6 +433,11 @@ def build_and_solve_v1(
         "solver_status": status_name,
         "gap_percent": gap,
         "total_overtime_used_slots": overtime_used_slots,
+        "total_internal_hours": (
+            internal_used_slots * slot_minutes / 60.0
+            if internal_used_slots is not None
+            else None
+        ),
         "objective_value": obj_val,
         "objective_breakdown": objective_breakdown,
     }
@@ -347,10 +451,24 @@ def build_and_solve_v1(
         return {"error": "Aucune solution trouvée par le solveur.", "metrics": metrics}
 
     schedule = {}
+    internal_hours_per_employee = {}
+    internal_hours_per_day = {}
+    coverage_slots_per_day = {}
+    internal_slots_per_day = {}
     for e in range(num_employees):
         emp_name = employees[e]
         schedule[emp_name] = {"days": {}, "total_hours": 0.0}
+        internal_hours_per_employee[emp_name] = 0.0
+        internal_hours_per_day[emp_name] = {}
+        coverage_slots_per_day[emp_name] = {}
+        internal_slots_per_day[emp_name] = {}
         for d in range(num_days):
+            internal_slots = [s for s in range(num_slots) if solver.Value(internal[(e, d, s)]) == 1]
+            if internal_slots:
+                internal_hours = len(internal_slots) * slot_minutes / 60.0
+                internal_hours_per_employee[emp_name] += internal_hours
+                internal_hours_per_day[emp_name][days[d]] = internal_hours
+                internal_slots_per_day[emp_name][days[d]] = internal_slots
             slots_worked = [
                 s for s in range(num_slots)
                 if solver.Value(x[(e, d, s)]) == 1
@@ -370,5 +488,13 @@ def build_and_solve_v1(
                     "hours": model_hours
                 }
                 schedule[emp_name]["total_hours"] += model_hours
+                coverage_slots_per_day[emp_name][days[d]] = slots_worked
 
-    return {"schedule": schedule, "metrics": metrics}
+    return {
+        "schedule": schedule,
+        "metrics": metrics,
+        "internal_hours_per_employee": internal_hours_per_employee,
+        "internal_hours_per_day": internal_hours_per_day,
+        "coverage_slots_per_day": coverage_slots_per_day,
+        "internal_slots_per_day": internal_slots_per_day,
+    }

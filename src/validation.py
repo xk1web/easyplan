@@ -13,7 +13,8 @@ def validate_global_feasibility(
     slot_minutes = sched.get("slot_minutes", 15)
     start_time_minutes = sched.get("start_time_minutes", 9 * 60 + 30)
     end_time_minutes = sched.get("end_time_minutes", 20 * 60 + 15)
-    min_staff = sched.get("min_staff_per_slot", 1)
+    staffing = config.get("staffing", {})
+    min_staff = staffing.get("min_staff_per_slot", sched.get("min_staff_per_slot", 1))
 
     hard = config.get("hard_constraints", {})
     max_daily_min = hard.get("max_daily_minutes", 600)
@@ -24,6 +25,7 @@ def validate_global_feasibility(
     total_required_slots = num_slots * num_days * min_staff
     total_required_hours = total_required_slots * slot_minutes / 60
 
+    # contracts[] is interpreted as full weekly contractual hours (no scaling).
     total_available_hours = sum(contracts)
 
     if total_available_hours < total_required_hours:

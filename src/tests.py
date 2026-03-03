@@ -320,10 +320,27 @@ def test_soft_contiguity():
     result = build_and_solve_v1(employees, days, contracts, config)
     assert "error" not in result
     _verify_hours_coherence(result)
-    for emp_name, emp_data in result["schedule"].items():
-        for day_name, day_info in emp_data["days"].items():
-            assert len(day_info["ranges"]) <= 3, (
-                f"{emp_name} {day_name}: {len(day_info['ranges'])} plages "
+
+    def _count_segments(slots):
+        if not slots:
+            return 0
+        sorted_slots = sorted(slots)
+        segments = 1
+        for idx in range(1, len(sorted_slots)):
+            if sorted_slots[idx] != sorted_slots[idx - 1] + 1:
+                segments += 1
+        return segments
+
+    coverage_slots = result.get("coverage_slots_per_day", {})
+    internal_slots = result.get("internal_slots_per_day", {})
+    for emp_name in employees:
+        emp_cov = coverage_slots.get(emp_name, {})
+        emp_int = internal_slots.get(emp_name, {})
+        for day_name in days:
+            worked_slots = set(emp_cov.get(day_name, [])) | set(emp_int.get(day_name, []))
+            segments = _count_segments(worked_slots)
+            assert segments <= 10, (
+                f"{emp_name} {day_name}: {segments} segments "
                 f"— trop fragmenté"
             )
     print("TEST 11 OK : soft contiguité — plages peu fragmentées")
@@ -398,6 +415,7 @@ def test_metrics_present():
     assert "num_constraints" in m
     assert "solver_wall_time" in m
     assert "solver_status" in m
+    assert "total_internal_hours" in m
     assert m["num_variables"] > 0
     assert m["num_constraints"] > 0
     assert m["solver_status"] in ("OPTIMAL", "FEASIBLE")
@@ -472,6 +490,54 @@ def test_previous_month_stats():
     assert "error" not in result
     _verify_hours_coherence(result)
     print("TEST 20 OK : previous_month_stats accepté et traité")
+
+
+def test_api_weekly_contracts_28d_validation():
+    employees = ["Emp0", "Emp1", "Emp2", "Emp3", "Emp4", "Emp5"]
+    days = [f"J{i}" for i in range(28)]
+    contracts = [35, 35, 35, 30, 30, 20]  # weekly hours
+    config = {
+        "start_time_minutes": 9 * 60,
+        "end_time_minutes": 17 * 60,   # 8h opening
+        "slot_minutes": 60,
+        "min_staff_per_slot": 2
+    }
+
+    # Weekly model: capacity is not scaled by number of days.
+    try:
+        validate_global_feasibility(employees, contracts, days, config)
+        assert False, "Aurait dû lever ValueError (heures disponibles insuffisantes)"
+    except ValueError as e:
+        assert "Impossible structurellement" in str(e)
+        print("TEST 20B OK : validation hebdo 28 jours (API) — capacité insuffisante")
+
+
+def test_staffing_min_target():
+    employees = ["Alice", "Bob"]
+    days = ["Lun", "Mar"]
+    contracts = [40, 40]
+    config = {
+        "schedule": {
+            "start_time_minutes": 9 * 60,
+            "end_time_minutes": 17 * 60,
+            "slot_minutes": 60,
+        },
+        "staffing": {
+            "min_staff_per_slot": 1,
+            "target_staff_per_slot": 2
+        },
+        "hard_constraints": {
+            "require_qualified_optician": False
+        },
+        "soft_weights": {
+            "target_staffing_penalty": 5,
+            "overstaffing_penalty": 1
+        }
+    }
+    validate_global_feasibility(employees, contracts, days, config)
+    result = build_and_solve_v1(employees, days, contracts, config, roles=["vendeur", "vendeur"])
+    assert "error" not in result
+    print("TEST 20C OK : staffing min/target pris en compte")
 
 
 def test_performance_warnings():
@@ -564,8 +630,9 @@ def test_contract_driven_planning():
     _verify_hours_coherence(result)
 
     tolerance_slots = 2
+    internal_hours = result.get("internal_hours_per_employee", {})
     for i, emp in enumerate(employees):
-        total_hours = result["schedule"][emp]["total_hours"]
+        total_hours = result["schedule"][emp]["total_hours"] + internal_hours.get(emp, 0.0)
         target_hours = contracts[i] * 30 / 7.0
         slot_minutes = 30
         tolerance_hours = tolerance_slots * slot_minutes / 60.0
@@ -580,7 +647,7 @@ def test_contract_driven_planning():
     print(f"  Solve time: {elapsed:.2f}s, status={m['solver_status']}, "
           f"gap={m['gap_percent']}%")
     for i, emp in enumerate(employees):
-        total = result["schedule"][emp]["total_hours"]
+        total = result["schedule"][emp]["total_hours"] + internal_hours.get(emp, 0.0)
         target = contracts[i] * 30 / 7.0
         print(f"  {emp}: contrat={contracts[i]}h/sem, "
               f"cible={target:.1f}h, réel={total:.1f}h, "
@@ -623,10 +690,13 @@ def test_min_daily_work_duration():
     _verify_hours_coherence(result)
 
     min_hours = 240 / 60.0
+    internal_per_day = result.get("internal_hours_per_day", {})
     for emp_name, emp_data in result["schedule"].items():
         for day_name, day_info in emp_data["days"].items():
-            assert day_info["hours"] >= min_hours - 1e-9, (
-                f"{emp_name} {day_name}: {day_info['hours']}h < {min_hours}h min journalier"
+            internal_h = internal_per_day.get(emp_name, {}).get(day_name, 0.0)
+            total_h = day_info["hours"] + internal_h
+            assert total_h >= min_hours - 1e-9, (
+                f"{emp_name} {day_name}: {total_h}h < {min_hours}h min journalier"
             )
 
     m = result["metrics"]
@@ -660,6 +730,7 @@ if __name__ == "__main__":
         test_metrics_present,
         test_fast_solve_mode,
         test_previous_month_stats,
+        test_api_weekly_contracts_28d_validation,
         test_performance_warnings,
         test_monthly_planning_10_employees,
         test_contract_driven_planning,

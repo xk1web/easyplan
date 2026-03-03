@@ -4,7 +4,7 @@ from ortools.sat.python import cp_model
 def add_monthly_hours_balancing(model, x, num_employees, num_days, num_slots,
                                 contracts, slot_minutes, weight=10,
                                 previous_month_stats=None, long_term_equity_weight=0.0,
-                                employees=None):
+                                employees=None, internal=None):
     penalties = []
 
     total_contract = sum(contracts)
@@ -15,7 +15,7 @@ def add_monthly_hours_balancing(model, x, num_employees, num_days, num_slots,
 
     for e in range(num_employees):
         emp_slots = sum(
-            x[(e, d, s)]
+            x[(e, d, s)] + (internal[(e, d, s)] if internal is not None else 0)
             for d in range(num_days)
             for s in range(num_slots)
         )
@@ -86,11 +86,12 @@ def add_saturday_fairness(model, x, num_employees, num_days, num_slots,
 
 def add_contract_target_penalty(model, x, num_employees, num_days, num_slots,
                                 contracts, slot_minutes, weight=50,
-                                weight_under=None, weight_over=None):
+                                weight_under=None, weight_over=None, internal=None):
     penalties = []
+    deviation_terms = []
 
     if weight_under is None:
-        weight_under = weight
+        weight_under = weight * 5
     if weight_over is None:
         weight_over = weight
 
@@ -102,7 +103,7 @@ def add_contract_target_penalty(model, x, num_employees, num_days, num_slots,
         contract_slots_e = min(contract_slots_e, num_days * num_slots)
 
         emp_slots = sum(
-            x[(e, d, s)]
+            x[(e, d, s)] + (internal[(e, d, s)] if internal is not None else 0)
             for d in range(num_days)
             for s in range(num_slots)
         )
@@ -111,11 +112,66 @@ def add_contract_target_penalty(model, x, num_employees, num_days, num_slots,
         over = model.NewIntVar(0, num_days * num_slots, f"contract_over_{e}")
         model.Add(emp_slots - contract_slots_e == over - under)
 
+        deviation = model.NewIntVar(0, num_days * num_slots, f"contract_dev_{e}")
+        model.Add(deviation == under + over)
+        deviation_terms.append(deviation)
+
         if weight_under > 0:
             penalties.append((under, weight_under))
         if weight_over > 0:
             penalties.append((over, weight_over))
 
+    return penalties, deviation_terms
+
+
+def add_max_daily_hours_penalty(model, x, num_employees, num_days, num_slots,
+                                slot_minutes, max_daily_minutes=600, weight=20, internal=None):
+    penalties = []
+    max_daily_slots = max_daily_minutes // slot_minutes
+    for e in range(num_employees):
+        for d in range(num_days):
+            daily_slots = sum(
+                x[(e, d, s)] + (internal[(e, d, s)] if internal is not None else 0)
+                for s in range(num_slots)
+            )
+            excess = model.NewIntVar(0, num_slots, f"max_daily_excess_{e}_{d}")
+            model.Add(excess >= daily_slots - max_daily_slots)
+            penalties.append((excess, weight))
+    return penalties
+
+
+def add_overstaffing_penalty(model, x, num_employees, num_days, num_slots,
+                             min_staff_per_slot, min_staff_per_day=None, weight=1):
+    penalties = []
+    use_day_list = isinstance(min_staff_per_day, (list, tuple)) and len(min_staff_per_day) == num_days
+    for d in range(num_days):
+        required = min_staff_per_day[d] if use_day_list else min_staff_per_slot
+        for s in range(num_slots):
+            assigned = sum(x[(e, d, s)] for e in range(num_employees))
+            excess = model.NewIntVar(0, num_employees, f"overstaff_{d}_{s}")
+            model.Add(excess >= assigned - required)
+            penalties.append((excess, weight))
+    return penalties
+
+
+def add_target_staffing_penalty(model, x, num_employees, num_days, num_slots,
+                                target_staff_per_slot, weight=5):
+    penalties = []
+    for d in range(num_days):
+        for s in range(num_slots):
+            assigned = sum(x[(e, d, s)] for e in range(num_employees))
+            shortfall = model.NewIntVar(0, num_employees, f"understaff_{d}_{s}")
+            model.Add(shortfall >= target_staff_per_slot - assigned)
+            penalties.append((shortfall, weight))
+    return penalties
+
+
+def add_internal_hours_penalty(model, internal, num_employees, num_days, num_slots, weight=1):
+    penalties = []
+    for e in range(num_employees):
+        for d in range(num_days):
+            for s in range(num_slots):
+                penalties.append((internal[(e, d, s)], weight))
     return penalties
 
 
@@ -131,7 +187,7 @@ def _get_weeks(num_days):
 
 def add_weekly_hours_fairness(model, x, num_employees, num_days, num_slots,
                               contracts, slot_minutes, weight=5,
-                              weight_under=None, weight_over=None):
+                              weight_under=None, weight_over=None, internal=None):
     penalties = []
 
     if weight_under is None:
@@ -147,7 +203,7 @@ def add_weekly_hours_fairness(model, x, num_employees, num_days, num_slots,
             target_slots = min(target_slots, len(week_days) * num_slots)
 
             week_slots = sum(
-                x[(e, d, s)]
+                x[(e, d, s)] + (internal[(e, d, s)] if internal is not None else 0)
                 for d in week_days
                 for s in range(num_slots)
             )
@@ -235,7 +291,7 @@ def add_amplitude_fairness(model, x, num_employees, num_days, num_slots, weight=
     return penalties
 
 
-def add_contiguity_preference(model, x, num_employees, num_days, num_slots,
+def add_contiguity_preference(model, activity, num_employees, num_days, num_slots,
                               slot_minutes, weight=3):
     penalties = []
     for e in range(num_employees):
@@ -243,12 +299,12 @@ def add_contiguity_preference(model, x, num_employees, num_days, num_slots,
             gap_reopens = []
             for s in range(1, num_slots):
                 sb = model.NewBoolVar(f"sb_{e}_{d}_{s}")
-                model.AddBoolOr([sb, x[(e, d, s)].Not(), x[(e, d, s - 1)]])
+                model.AddBoolOr([sb, activity[(e, d, s)].Not(), activity[(e, d, s - 1)]])
                 model.AddHint(sb, 0)
                 gap_reopens.append(sb)
 
             excess = model.NewIntVar(0, num_slots, f"excess_{e}_{d}")
-            model.Add(excess >= x[(e, d, 0)] + sum(gap_reopens) - 1)
+            model.Add(excess >= activity[(e, d, 0)] + sum(gap_reopens) - 1)
             model.AddHint(excess, 0)
             penalties.append((excess, weight))
     return penalties

@@ -21,27 +21,27 @@ def add_min_coverage(model, x, num_employees, num_days, num_slots, min_staff):
             )
 
 
-def add_max_weekly_hours(model, x, num_employees, num_days, num_slots, contracts, slot_minutes):
+def add_max_weekly_hours(model, x, num_employees, num_days, num_slots, contracts, slot_minutes, internal=None):
     weeks = get_weeks(num_days)
     for e in range(num_employees):
         max_slots = contracts[e] * 60 // slot_minutes
         for week_days in weeks:
             week_slots = sum(
-                x[(e, d, s)]
+                x[(e, d, s)] + (internal[(e, d, s)] if internal is not None else 0)
                 for d in week_days
                 for s in range(num_slots)
             )
             model.Add(week_slots <= max_slots)
 
 
-def add_max_days_per_week(model, x, num_employees, num_days, num_slots, max_days=6):
+def add_max_days_per_week(model, x, num_employees, num_days, num_slots, max_days=6, work=None):
     weeks = get_weeks(num_days)
     for e in range(num_employees):
         for week_days in weeks:
             day_worked_vars = []
             for d in week_days:
                 worked = model.NewBoolVar(f"day_worked_{e}_{d}")
-                daily_slots = sum(x[(e, d, s)] for s in range(num_slots))
+                daily_slots = sum((work or x)[(e, d, s)] for s in range(num_slots))
                 model.Add(daily_slots >= 1).OnlyEnforceIf(worked)
                 model.Add(daily_slots == 0).OnlyEnforceIf(worked.Not())
                 day_worked_vars.append(worked)
@@ -60,8 +60,20 @@ def _build_prefix_sums(model, x, e, d, num_slots, name_prefix):
     return prefix
 
 
+def _build_prefix_sums_work(model, work, e, d, num_slots, name_prefix):
+    prefix = []
+    for s in range(num_slots):
+        p = model.NewIntVar(0, num_slots, f"{name_prefix}_{e}_{d}_{s}")
+        if s == 0:
+            model.Add(p == work[(e, d, s)])
+        else:
+            model.Add(p == prefix[s - 1] + work[(e, d, s)])
+        prefix.append(p)
+    return prefix
+
+
 def add_weekly_rest_35h(model, x, num_employees, num_days, num_slots,
-                        start_time_minutes, slot_minutes, rest_minutes=2100):
+                        start_time_minutes, slot_minutes, rest_minutes=2100, work=None):
     if rest_minutes <= 0:
         return
 
@@ -70,9 +82,14 @@ def add_weekly_rest_35h(model, x, num_employees, num_days, num_slots,
     def get_prefix(e, d):
         key = (e, d)
         if key not in prefix_cache:
-            prefix_cache[key] = _build_prefix_sums(
-                model, x, e, d, num_slots, "pref_weekly_rest"
-            )
+            if work is None:
+                prefix_cache[key] = _build_prefix_sums(
+                    model, x, e, d, num_slots, "pref_weekly_rest"
+                )
+            else:
+                prefix_cache[key] = _build_prefix_sums_work(
+                    model, work, e, d, num_slots, "pref_weekly_rest"
+                )
         return prefix_cache[key]
 
     for e in range(num_employees):
@@ -81,7 +98,7 @@ def add_weekly_rest_35h(model, x, num_employees, num_days, num_slots,
             d_after = d + 2
 
             has_work_mid = model.NewBoolVar(f"work_mid_{e}_{d_mid}")
-            mid_slots = sum(x[(e, d_mid, s)] for s in range(num_slots))
+            mid_slots = sum((work or x)[(e, d_mid, s)] for s in range(num_slots))
             model.Add(mid_slots >= 1).OnlyEnforceIf(has_work_mid)
             model.Add(mid_slots == 0).OnlyEnforceIf(has_work_mid.Not())
 
@@ -99,30 +116,30 @@ def add_weekly_rest_35h(model, x, num_employees, num_days, num_slots,
                 if t >= num_slots:
                     t = num_slots - 1
                 model.Add(prefix_after[t] == 0).OnlyEnforceIf(
-                    [x[(e, d, s_end)], has_work_mid.Not()]
+                    [(work or x)[(e, d, s_end)], has_work_mid.Not()]
                 )
 
 
 def add_min_daily_work_duration(model, x, num_employees, num_days, num_slots,
-                                slot_minutes, min_daily_minutes=240):
+                                slot_minutes, min_daily_minutes=240, work=None):
     if min_daily_minutes <= 0:
         return
     min_daily_slots = min_daily_minutes // slot_minutes
     for e in range(num_employees):
         for d in range(num_days):
             day_worked = model.NewBoolVar(f"min_dur_worked_{e}_{d}")
-            daily_slots = sum(x[(e, d, s)] for s in range(num_slots))
+            daily_slots = sum((work or x)[(e, d, s)] for s in range(num_slots))
             model.Add(daily_slots >= 1).OnlyEnforceIf(day_worked)
             model.Add(daily_slots == 0).OnlyEnforceIf(day_worked.Not())
             model.Add(daily_slots >= min_daily_slots).OnlyEnforceIf(day_worked)
 
 
 def add_max_daily_hours(model, x, num_employees, num_days, num_slots,
-                        slot_minutes, max_daily_minutes=600):
+                        slot_minutes, max_daily_minutes=600, work=None):
     max_daily_slots = max_daily_minutes // slot_minutes
     for e in range(num_employees):
         for d in range(num_days):
-            daily_slots = sum(x[(e, d, s)] for s in range(num_slots))
+            daily_slots = sum((work or x)[(e, d, s)] for s in range(num_slots))
             model.Add(daily_slots <= max_daily_slots)
 
 
@@ -137,19 +154,23 @@ def add_qualified_optician_coverage(model, x, num_employees, num_days, num_slots
             )
 
 
-def add_unavailabilities(model, x, unavailabilities, num_slots):
+def add_unavailabilities(model, x, unavailabilities, num_slots, internal=None):
     for entry in unavailabilities:
         if len(entry) == 3:
             emp_idx, day_idx, slot_idx = entry
             model.Add(x[(emp_idx, day_idx, slot_idx)] == 0)
+            if internal is not None:
+                model.Add(internal[(emp_idx, day_idx, slot_idx)] == 0)
         elif len(entry) == 2:
             emp_idx, day_idx = entry
             for s in range(num_slots):
                 model.Add(x[(emp_idx, day_idx, s)] == 0)
+                if internal is not None:
+                    model.Add(internal[(emp_idx, day_idx, s)] == 0)
 
 
 def add_rest_between_days(model, x, num_employees, num_days, num_slots,
-                          start_time_minutes, slot_minutes, rest_minutes=660):
+                          start_time_minutes, slot_minutes, rest_minutes=660, work=None):
     if rest_minutes <= 0:
         return
 
@@ -158,9 +179,14 @@ def add_rest_between_days(model, x, num_employees, num_days, num_slots,
     def get_prefix(e, d):
         key = (e, d)
         if key not in prefix_cache:
-            prefix_cache[key] = _build_prefix_sums(
-                model, x, e, d, num_slots, "pref_daily_rest"
-            )
+            if work is None:
+                prefix_cache[key] = _build_prefix_sums(
+                    model, x, e, d, num_slots, "pref_daily_rest"
+                )
+            else:
+                prefix_cache[key] = _build_prefix_sums_work(
+                    model, work, e, d, num_slots, "pref_daily_rest"
+                )
         return prefix_cache[key]
 
     for e in range(num_employees):
@@ -177,4 +203,4 @@ def add_rest_between_days(model, x, num_employees, num_days, num_slots,
                 t = earliest_slot - 1
                 if t >= num_slots:
                     t = num_slots - 1
-                model.Add(prefix_next[t] == 0).OnlyEnforceIf(x[(e, d, s_end)])
+                model.Add(prefix_next[t] == 0).OnlyEnforceIf((work or x)[(e, d, s_end)])

@@ -1,6 +1,7 @@
 import time
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from src.config import load_config
 from src.validation import validate_global_feasibility
@@ -17,6 +18,14 @@ app = FastAPI(
     title="Planning Engine API",
     description="Moteur de génération de planning pour magasins d'optique (CP-SAT)",
     version="2.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -44,6 +53,7 @@ class SolverMetrics(BaseModel):
     gap_percent: Optional[float] = None
     warnings: Optional[List[str]] = None
     objective_value: Optional[float] = None
+    total_internal_hours: Optional[float] = None
 
 
 class PlanningResponse(BaseModel):
@@ -127,10 +137,11 @@ def generate_planning(request: PlanningRequest):
     capacity_with_overtime = compute_capacity_with_overtime_hours(request.contracts, len(request.days), config)
     hours_per_employee = None
     total_overtime_used_hours = None
-    if metrics and metrics.total_overtime_used_slots is not None:
+    total_overtime_used_slots = metrics_data.get("total_overtime_used_slots") if metrics_data else None
+    if total_overtime_used_slots is not None:
         sched = config.get("schedule", config)
         slot_minutes = sched.get("slot_minutes", 15)
-        total_overtime_used_hours = metrics.total_overtime_used_slots * slot_minutes / 60.0
+        total_overtime_used_hours = total_overtime_used_slots * slot_minutes / 60.0
 
     classification = classify_result(
         validation_error=validation_error,
@@ -284,10 +295,11 @@ def adjust_planning(request: AdjustPlanningRequest):
     capacity_with_overtime = compute_capacity_with_overtime_hours(contracts, len(request.days), config)
     hours_per_employee = None
     total_overtime_used_hours = None
-    if metrics and metrics.total_overtime_used_slots is not None:
+    total_overtime_used_slots = metrics_data.get("total_overtime_used_slots") if metrics_data else None
+    if total_overtime_used_slots is not None:
         sched = config.get("schedule", config)
         slot_minutes = sched.get("slot_minutes", 15)
-        total_overtime_used_hours = metrics.total_overtime_used_slots * slot_minutes / 60.0
+        total_overtime_used_hours = total_overtime_used_slots * slot_minutes / 60.0
 
     classification = classify_result(
         validation_error=validation_error,
