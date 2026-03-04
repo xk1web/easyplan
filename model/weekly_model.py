@@ -191,6 +191,8 @@ def build_weekly_model(
         template_slots = {"FULL_OPEN_FALLBACK": list(range(num_slots))}
     templates = list(template_slots.keys())
     print("TEMPLATES_USED", templates)
+    print("TEMPLATE_DRIVEN_SLOTS_ENABLED")
+    template_duration_slots = {t: len(template_slots[t]) for t in templates}
 
     max_daily_minutes = int(hard.get("max_daily_minutes", 600))
     if max_daily_minutes > 600:
@@ -289,14 +291,17 @@ def build_weekly_model(
     for e in range(num_employees):
         total_week_slots = []
         for d in range(num_days):
-            day_slots = sum(x[(e, d, s)] for s in range(num_slots))
-            model.Add(day_slots <= max_daily_slots)
-            total_week_slots.append(day_slots)
+            hours_worked = sum(
+                shift[(e, d, t)] * template_duration_slots[t]
+                for t in templates
+            )
+            model.Add(hours_worked <= max_daily_slots)
+            total_week_slots.append(hours_worked)
 
             day_flag = model.NewBoolVar(f"worked_day_{e}_{d}")
             worked_day[(e, d)] = day_flag
-            model.Add(day_slots >= 1).OnlyEnforceIf(day_flag)
-            model.Add(day_slots == 0).OnlyEnforceIf(day_flag.Not())
+            model.Add(hours_worked >= 1).OnlyEnforceIf(day_flag)
+            model.Add(hours_worked == 0).OnlyEnforceIf(day_flag.Not())
 
         model.Add(sum(total_week_slots) == contracts_slots[e])
         model.Add(sum(worked_day[(e, d)] for d in range(num_days)) <= max_days_per_week)
