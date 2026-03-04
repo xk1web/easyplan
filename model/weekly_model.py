@@ -271,6 +271,15 @@ def build_weekly_model(
     print("SHIFT_DISTRIBUTION_CONSTRAINTS_ENABLED")
 
     for e in range(num_employees):
+        closing_streak_violation = model.NewIntVar(0, num_days, f"closing_streak_violation_{e}")
+        for d in range(num_days - 1):
+            closing_shift_d = sum(shift[(e, d, t)] for t in closing_templates) if closing_templates else 0
+            closing_shift_next = sum(shift[(e, d + 1, t)] for t in closing_templates) if closing_templates else 0
+            model.Add(closing_shift_d + closing_shift_next <= 1 + closing_streak_violation)
+        soft_penalties.append(closing_streak_violation * 4)
+    print("CLOSING_ROTATION_ENABLED")
+
+    for e in range(num_employees):
         for d in range(num_days):
             for t in templates:
                 for s in template_slots[t]:
