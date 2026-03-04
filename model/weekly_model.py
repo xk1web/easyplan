@@ -323,6 +323,7 @@ def build_weekly_model(
                 model.Add(sum(x[(e, d, s)] for e in optician_indices) >= 1)
 
     worked_day = {}
+    target_hours_slots = int(round(sum(contracts_slots) / max(1, num_employees)))
     for e in range(num_employees):
         total_week_slots = []
         for d in range(num_days):
@@ -338,8 +339,15 @@ def build_weekly_model(
             model.Add(hours_worked >= 1).OnlyEnforceIf(day_flag)
             model.Add(hours_worked == 0).OnlyEnforceIf(day_flag.Not())
 
-        model.Add(sum(total_week_slots) == contracts_slots[e])
+        hours_employee = sum(total_week_slots)
+        model.Add(hours_employee == contracts_slots[e])
         model.Add(sum(worked_day[(e, d)] for d in range(num_days)) <= max_days_per_week)
+
+        diff_hours = model.NewIntVar(0, 40 * 60 // slot_minutes, f"diff_hours_{e}")
+        model.Add(hours_employee - target_hours_slots <= diff_hours)
+        model.Add(target_hours_slots - hours_employee <= diff_hours)
+        soft_penalties.append(diff_hours * 2)
+    print("TEAM_BALANCING_ENABLED")
 
     _add_rest_11h_constraints(
         model=model,
