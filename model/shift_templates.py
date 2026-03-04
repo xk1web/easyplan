@@ -6,6 +6,10 @@ from typing import Dict, Iterable, List, Tuple, Union
 TimeValue = Union[int, str]
 
 MIN_SHIFT_MINUTES = 6 * 60
+CLOSING_TEMPLATES = [
+    "CLOSING_LONG",
+    "FULL_LATE",
+]
 
 SHIFT_TEMPLATES: Dict[str, Dict[str, Union[int, str]]] = {
     # Tier 1 — journees dominantes

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ortools.sat.python import cp_model
-from model.shift_templates import SHIFT_TEMPLATES, build_template_slots
+from model.shift_templates import CLOSING_TEMPLATES, SHIFT_TEMPLATES, build_template_slots
 from utils.time_slots import time_to_slot
 
 try:
@@ -213,7 +213,7 @@ def build_weekly_model(
     print("TEMPLATE_DRIVEN_SLOTS_ENABLED")
     template_duration_slots = {t: len(template_slots[t]) for t in templates}
     full_templates = [t for t in ["FULL_OPEN", "FULL_LATE", "FULL_EARLY"] if t in templates]
-    closing_templates = [t for t in ["CLOSING_LONG", "FULL_LATE"] if t in templates]
+    closing_templates = [t for t in CLOSING_TEMPLATES if t in templates]
     short_templates = [t for t in ["SHORT_AM", "SHORT_PM", "SHORT_MID"] if t in templates]
 
     max_daily_minutes = int(hard.get("max_daily_minutes", 600))
@@ -289,13 +289,19 @@ def build_weekly_model(
         soft_penalties.append(short_violation * 2)
     print("SHIFT_DISTRIBUTION_CONSTRAINTS_ENABLED")
 
+    closing_shift = {}
     for e in range(num_employees):
-        closing_streak_violation = model.NewIntVar(0, num_days, f"closing_streak_violation_{e}")
+        for d in range(num_days):
+            closing_shift[(e, d)] = (
+                sum(shift[(e, d, t)] for t in closing_templates) if closing_templates else 0
+            )
         for d in range(num_days - 1):
-            closing_shift_d = sum(shift[(e, d, t)] for t in closing_templates) if closing_templates else 0
-            closing_shift_next = sum(shift[(e, d + 1, t)] for t in closing_templates) if closing_templates else 0
-            model.Add(closing_shift_d + closing_shift_next <= 1 + closing_streak_violation)
-        soft_penalties.append(closing_streak_violation * 4)
+            violation = model.NewIntVar(0, 1, f"closing_violation_{e}_{d}")
+            model.Add(
+                closing_shift[(e, d)] + closing_shift[(e, d + 1)]
+                <= 1 + violation
+            )
+            soft_penalties.append(violation * 4)
     print("CLOSING_ROTATION_ENABLED")
 
     saturday_index = 5
