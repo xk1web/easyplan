@@ -116,8 +116,6 @@ def _run_one(
     )
     metrics = result.get("metrics", {})
     status = metrics.get("solver_status", "UNKNOWN")
-    if "error" in result:
-        status = "INFEASIBLE"
     return {
         "status": status,
         "error": result.get("error"),

@@ -197,8 +197,6 @@ def _solver_status_from_result(result: Dict) -> str:
     status = metrics.get("solver_status")
     if status:
         return status
-    if result.get("error"):
-        return "INFEASIBLE"
     if result.get("schedule"):
         return "FEASIBLE"
     return "UNKNOWN"

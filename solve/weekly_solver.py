@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any
 
 from ortools.sat.python import cp_model
 
@@ -14,10 +13,13 @@ class WeeklySolveOutput:
     solver_status: str
     api_status: str
     wall_time_seconds: float
+    num_branches: int
+    num_conflicts: int
     num_variables: int
     num_constraints: int
     x_values: Dict[Tuple[int, int, int], int]
     hours_per_employee: Dict[str, float]
+    solver_result: Dict[str, Any]
 
 
 def map_solver_status_to_api(status: str) -> str:
@@ -28,6 +30,15 @@ def map_solver_status_to_api(status: str) -> str:
         "UNKNOWN": "timeout",
     }
     return mapping.get(status, "timeout")
+
+
+def build_solver_result(status_name: str, solver: cp_model.CpSolver) -> Dict[str, Any]:
+    return {
+        "status": map_solver_status_to_api(status_name),
+        "wall_time": solver.WallTime(),
+        "num_branches": solver.NumBranches(),
+        "num_conflicts": solver.NumConflicts(),
+    }
 
 
 def solve_weekly_model(
@@ -41,12 +52,11 @@ def solve_weekly_model(
     solver.parameters.num_search_workers = max(1, num_workers)
     solver.parameters.random_seed = 42
 
-    t0 = time.time()
     status_code = solver.Solve(artifacts.model)
-    elapsed = round(time.time() - t0, 3)
 
     status_name = solver.StatusName(status_code)
     api_status = map_solver_status_to_api(status_name)
+    solver_result = build_solver_result(status_name, solver)
 
     x_values: Dict[Tuple[int, int, int], int] = {}
     hours_per_employee = {name: 0.0 for name in artifacts.employees}
@@ -64,9 +74,12 @@ def solve_weekly_model(
     return WeeklySolveOutput(
         solver_status=status_name,
         api_status=api_status,
-        wall_time_seconds=elapsed,
+        wall_time_seconds=solver.WallTime(),
+        num_branches=solver.NumBranches(),
+        num_conflicts=solver.NumConflicts(),
         num_variables=len(artifacts.model.Proto().variables),
         num_constraints=len(artifacts.model.Proto().constraints),
         x_values=x_values,
         hours_per_employee=hours_per_employee,
+        solver_result=solver_result,
     )

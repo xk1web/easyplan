@@ -106,6 +106,8 @@ def run_weekly_v1_engine(
         "num_constraints": solve_output.num_constraints,
         "solver_wall_time": solve_output.wall_time_seconds,
         "solver_status": solve_output.solver_status,
+        "num_branches": solve_output.num_branches,
+        "num_conflicts": solve_output.num_conflicts,
     }
 
     result = {
@@ -116,6 +118,7 @@ def run_weekly_v1_engine(
         "kpi": kpi,
         "explanation": explanation,
         "hours_per_employee": solve_output.hours_per_employee,
+        "solver_result": solve_output.solver_result,
     }
 
     if solve_output.solver_status in ("OPTIMAL", "FEASIBLE"):
