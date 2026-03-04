@@ -371,10 +371,17 @@ def build_weekly_model(
                 required_staff = 0
 
             coverage = sum(x[(e, d, s)] for e in range(num_employees))
-            model.Add(coverage >= required_staff)
+            understaff = model.NewIntVar(
+                0,
+                required_staff,
+                f"understaff_{d}_{s}",
+            )
+            model.Add(coverage + understaff >= required_staff)
+            soft_penalties.append(understaff * 10)
             if require_optician and required_staff > 0:
                 model.Add(sum(x[(e, d, s)] for e in optician_indices) >= 1)
     print("OPTICAL_TRAFFIC_CURVE_ENABLED")
+    print("SOFT_COVERAGE_ENABLED")
 
     worked_day = {}
     target_hours_slots = int(round(sum(contracts_slots) / max(1, num_employees)))
