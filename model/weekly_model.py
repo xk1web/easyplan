@@ -279,6 +279,18 @@ def build_weekly_model(
         soft_penalties.append(closing_streak_violation * 4)
     print("CLOSING_ROTATION_ENABLED")
 
+    saturday_index = 5
+    if saturday_index < num_days:
+        for e in range(num_employees):
+            saturday_work = sum(
+                shift[(e, saturday_index, t)]
+                for t in templates
+            )
+            saturday_violation = model.NewIntVar(0, 2, f"saturday_violation_{e}")
+            model.Add(saturday_work <= 1 + saturday_violation)
+            soft_penalties.append(saturday_violation * 4)
+    print("SATURDAY_BALANCING_ENABLED")
+
     for e in range(num_employees):
         for d in range(num_days):
             for t in templates:
