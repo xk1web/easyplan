@@ -193,6 +193,9 @@ def build_weekly_model(
     print("TEMPLATES_USED", templates)
     print("TEMPLATE_DRIVEN_SLOTS_ENABLED")
     template_duration_slots = {t: len(template_slots[t]) for t in templates}
+    full_templates = [t for t in ["FULL_OPEN", "FULL_LATE", "FULL_EARLY"] if t in templates]
+    closing_templates = [t for t in ["CLOSING_LONG", "FULL_LATE"] if t in templates]
+    short_templates = [t for t in ["SHORT_AM", "SHORT_PM", "SHORT_MID"] if t in templates]
 
     max_daily_minutes = int(hard.get("max_daily_minutes", 600))
     if max_daily_minutes > 600:
@@ -234,6 +237,38 @@ def build_weekly_model(
     for e in range(num_employees):
         for d in range(num_days):
             model.Add(sum(shift[(e, d, t)] for t in templates) <= 1)
+
+    # Soft constraints: weekly distribution of shift types.
+    soft_penalties = []
+    for e in range(num_employees):
+        full_days = sum(
+            shift[(e, d, t)]
+            for d in range(num_days)
+            for t in full_templates
+        ) if full_templates else 0
+        closing_days = sum(
+            shift[(e, d, t)]
+            for d in range(num_days)
+            for t in closing_templates
+        ) if closing_templates else 0
+        short_days = sum(
+            shift[(e, d, t)]
+            for d in range(num_days)
+            for t in short_templates
+        ) if short_templates else 0
+
+        full_violation = model.NewIntVar(0, 7, f"full_violation_{e}")
+        closing_violation = model.NewIntVar(0, 7, f"closing_violation_{e}")
+        short_violation = model.NewIntVar(0, 7, f"short_violation_{e}")
+
+        model.Add(full_days <= 3 + full_violation)
+        model.Add(closing_days <= 3 + closing_violation)
+        model.Add(short_days >= 1 - short_violation)
+
+        soft_penalties.append(full_violation * 5)
+        soft_penalties.append(closing_violation * 3)
+        soft_penalties.append(short_violation * 2)
+    print("SHIFT_DISTRIBUTION_CONSTRAINTS_ENABLED")
 
     for e in range(num_employees):
         for d in range(num_days):
@@ -326,6 +361,8 @@ def build_weekly_model(
         slot_minutes=slot_minutes,
         rest_minutes=weekly_rest_minutes,
     )
+
+    model.Minimize(sum(soft_penalties))
 
     return WeeklyModelArtifacts(
         model=model,
