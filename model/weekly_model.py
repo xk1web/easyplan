@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from ortools.sat.python import cp_model
-from model.shift_templates import SHIFT_TEMPLATES
+from model.shift_templates import SHIFT_TEMPLATES, build_template_slots
 
 
 @dataclass
@@ -163,9 +163,7 @@ def build_weekly_model(
 
     schedule = config.get("schedule", config)
     hard = config.get("hard_constraints", {})
-    templates = config.get("shift_templates", [])
     print("SHIFT_TEMPLATES_LOADED", len(SHIFT_TEMPLATES))
-    print("TEMPLATES_USED", templates)
 
     slot_minutes = int(schedule.get("slot_minutes", 15))
     start_time_minutes = int(schedule.get("start_time_minutes", 9 * 60 + 30))
@@ -181,6 +179,18 @@ def build_weekly_model(
     num_employees = len(employees)
     num_days = len(days)
     num_slots = opening_minutes // slot_minutes
+
+    try:
+        template_slots = build_template_slots(
+            start_time_minutes, end_time_minutes, slot_minutes=slot_minutes
+        )
+    except ValueError:
+        # Keep model solvable for narrow store windows while template library is >= 6h.
+        template_slots = {}
+    if not template_slots:
+        template_slots = {"FULL_OPEN_FALLBACK": list(range(num_slots))}
+    templates = list(template_slots.keys())
+    print("TEMPLATES_USED", templates)
 
     max_daily_minutes = int(hard.get("max_daily_minutes", 600))
     if max_daily_minutes > 600:
@@ -211,6 +221,38 @@ def build_weekly_model(
                 x[(e, d, s)] = var
                 if d in closed_days:
                     model.Add(var == 0)
+
+    shift = {}
+    for e in range(num_employees):
+        for d in range(num_days):
+            for t in templates:
+                shift[(e, d, t)] = model.NewBoolVar(f"shift_{e}_{d}_{t}")
+    print("SHIFT_VARIABLES_CREATED")
+
+    for e in range(num_employees):
+        for d in range(num_days):
+            model.Add(sum(shift[(e, d, t)] for t in templates) <= 1)
+
+    for e in range(num_employees):
+        for d in range(num_days):
+            for t in templates:
+                for s in template_slots[t]:
+                    model.Add(x[(e, d, s)] >= shift[(e, d, t)])
+
+    covering_templates_by_slot = {}
+    for s in range(num_slots):
+        covering_templates_by_slot[s] = [t for t in templates if s in template_slots[t]]
+
+    for e in range(num_employees):
+        for d in range(num_days):
+            for s in range(num_slots):
+                covering_templates = covering_templates_by_slot[s]
+                if covering_templates:
+                    model.Add(
+                        x[(e, d, s)] <= sum(shift[(e, d, t)] for t in covering_templates)
+                    )
+                else:
+                    model.Add(x[(e, d, s)] == 0)
 
     # Enforce a single contiguous work block per employee per day.
     for e in range(num_employees):
