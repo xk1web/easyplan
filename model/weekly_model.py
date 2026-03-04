@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from ortools.sat.python import cp_model
+from model.shift_templates import SHIFT_TEMPLATES
 
 
 @dataclass
@@ -163,6 +164,7 @@ def build_weekly_model(
     schedule = config.get("schedule", config)
     hard = config.get("hard_constraints", {})
     templates = config.get("shift_templates", [])
+    print("SHIFT_TEMPLATES_LOADED", len(SHIFT_TEMPLATES))
     print("TEMPLATES_USED", templates)
 
     slot_minutes = int(schedule.get("slot_minutes", 15))
