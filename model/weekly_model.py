@@ -162,6 +162,8 @@ def build_weekly_model(
 
     schedule = config.get("schedule", config)
     hard = config.get("hard_constraints", {})
+    templates = config.get("shift_templates", [])
+    print("TEMPLATES_USED", templates)
 
     slot_minutes = int(schedule.get("slot_minutes", 15))
     start_time_minutes = int(schedule.get("start_time_minutes", 9 * 60 + 30))
@@ -207,6 +209,20 @@ def build_weekly_model(
                 x[(e, d, s)] = var
                 if d in closed_days:
                     model.Add(var == 0)
+
+    # Enforce a single contiguous work block per employee per day.
+    for e in range(num_employees):
+        for d in range(num_days):
+            starts = []
+            for s in range(num_slots):
+                start = model.NewBoolVar(f"start_{e}_{d}_{s}")
+                if s == 0:
+                    model.Add(start >= x[(e, d, s)])
+                else:
+                    model.Add(start >= x[(e, d, s)] - x[(e, d, s - 1)])
+                starts.append(start)
+            model.Add(sum(starts) <= 1)
+    print("CONTIGUOUS_SHIFT_CONSTRAINT_ENABLED")
 
     for entry in unavailabilities or []:
         if len(entry) == 2:
