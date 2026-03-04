@@ -2,10 +2,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ortools.sat.python import cp_model
 from model.shift_templates import SHIFT_TEMPLATES, build_template_slots
+from utils.time_slots import time_to_slot
+
+try:
+    from config.store_config import BASE_MIN_STAFF, EVENING_BOOST, EVENING_PEAK_HOUR, SATURDAY_BOOST
+except Exception:
+    # Fallback loader when a non-package module named "config" shadows local config/.
+    store_cfg: Dict[str, object] = {}
+    store_cfg_path = Path(__file__).resolve().parents[1] / "config" / "store_config.py"
+    exec(store_cfg_path.read_text(encoding="utf-8"), store_cfg)
+    BASE_MIN_STAFF = int(store_cfg["BASE_MIN_STAFF"])
+    EVENING_PEAK_HOUR = str(store_cfg["EVENING_PEAK_HOUR"])
+    EVENING_BOOST = int(store_cfg["EVENING_BOOST"])
+    SATURDAY_BOOST = int(store_cfg["SATURDAY_BOOST"])
 
 
 @dataclass
@@ -179,6 +193,11 @@ def build_weekly_model(
     num_employees = len(employees)
     num_days = len(days)
     num_slots = opening_minutes // slot_minutes
+    evening_peak_slot = time_to_slot(
+        EVENING_PEAK_HOUR,
+        start_time_minutes=start_time_minutes,
+        slot_minutes=slot_minutes,
+    )
 
     try:
         template_slots = build_template_slots(
@@ -336,12 +355,20 @@ def build_weekly_model(
             model.Add(x[(emp_idx, day_idx, slot_idx)] == 0)
 
     for d in range(num_days):
-        required = min_staff_per_day[d]
         for s in range(num_slots):
+            required_staff = BASE_MIN_STAFF
+            if s >= evening_peak_slot:
+                required_staff += EVENING_BOOST
+            if d == saturday_index:
+                required_staff += SATURDAY_BOOST
+            if d in closed_days:
+                required_staff = 0
+
             coverage = sum(x[(e, d, s)] for e in range(num_employees))
-            model.Add(coverage >= required)
-            if require_optician and required > 0:
+            model.Add(coverage >= required_staff)
+            if require_optician and required_staff > 0:
                 model.Add(sum(x[(e, d, s)] for e in optician_indices) >= 1)
+    print("OPTICAL_TRAFFIC_CURVE_ENABLED")
 
     worked_day = {}
     target_hours_slots = int(round(sum(contracts_slots) / max(1, num_employees)))
