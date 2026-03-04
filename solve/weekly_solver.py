@@ -47,16 +47,39 @@ def solve_weekly_model(
     max_time_seconds: int,
     num_workers: int,
 ) -> WeeklySolveOutput:
+    model = artifacts.model
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = max_time_seconds
     solver.parameters.num_search_workers = max(1, num_workers)
     solver.parameters.random_seed = 42
 
-    status_code = solver.Solve(artifacts.model)
+    # Structural observability of the solved CP-SAT model.
+    try:
+        num_variables = model.NumVariables()
+        num_constraints = model.NumConstraints()
+    except AttributeError:
+        num_variables = len(model.Proto().variables)
+        num_constraints = len(model.Proto().constraints)
+    model_stats = {
+        "num_variables": num_variables,
+        "num_constraints": num_constraints,
+    }
+    print("MODEL_STATS", model_stats)
+
+    status_code = solver.Solve(model)
 
     status_name = solver.StatusName(status_code)
     api_status = map_solver_status_to_api(status_name)
+    metrics = {
+        "status": api_status,
+        "wall_time": solver.WallTime(),
+        "num_branches": solver.NumBranches(),
+        "num_conflicts": solver.NumConflicts(),
+        "num_variables": model_stats["num_variables"],
+        "num_constraints": model_stats["num_constraints"],
+    }
     solver_result = build_solver_result(status_name, solver)
+    solver_result["metrics"] = metrics
 
     x_values: Dict[Tuple[int, int, int], int] = {}
     hours_per_employee = {name: 0.0 for name in artifacts.employees}
@@ -77,8 +100,8 @@ def solve_weekly_model(
         wall_time_seconds=solver.WallTime(),
         num_branches=solver.NumBranches(),
         num_conflicts=solver.NumConflicts(),
-        num_variables=len(artifacts.model.Proto().variables),
-        num_constraints=len(artifacts.model.Proto().constraints),
+        num_variables=model_stats["num_variables"],
+        num_constraints=model_stats["num_constraints"],
         x_values=x_values,
         hours_per_employee=hours_per_employee,
         solver_result=solver_result,
