@@ -40,12 +40,22 @@ export interface EmployeeSchedule {
   total_hours: number;
 }
 
+export interface GlobalKPI {
+  total_contracted_hours: number
+  total_worked_hours: number
+  total_internal_hours: number
+  total_coverage_hours: number
+  coverage_gap: number
+  overstaff_hours: number
+}
+
 export interface PlanningResponse {
   status: string;
   schedule?: Record<string, EmployeeSchedule> | null;
   solver_time: number;
   solve_time_seconds?: number;
   metrics?: SolverMetrics | null;
+  kpi: GlobalKPI;
   error?: string | null;
   total_overtime_used_hours?: number | null;
   capacity_total_hours?: number | null;

@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import Dict, Tuple
+
+from ortools.sat.python import cp_model
+
+from model.weekly_model import WeeklyModelArtifacts
+
+
+@dataclass
+class WeeklySolveOutput:
+    solver_status: str
+    api_status: str
+    wall_time_seconds: float
+    num_variables: int
+    num_constraints: int
+    x_values: Dict[Tuple[int, int, int], int]
+    hours_per_employee: Dict[str, float]
+
+
+def map_solver_status_to_api(status: str) -> str:
+    mapping = {
+        "OPTIMAL": "optimal",
+        "FEASIBLE": "feasible",
+        "INFEASIBLE": "infeasible",
+        "UNKNOWN": "timeout",
+    }
+    return mapping.get(status, "timeout")
+
+
+def solve_weekly_model(
+    artifacts: WeeklyModelArtifacts,
+    *,
+    max_time_seconds: int,
+    num_workers: int,
+) -> WeeklySolveOutput:
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = max_time_seconds
+    solver.parameters.num_search_workers = max(1, num_workers)
+    solver.parameters.random_seed = 42
+
+    t0 = time.time()
+    status_code = solver.Solve(artifacts.model)
+    elapsed = round(time.time() - t0, 3)
+
+    status_name = solver.StatusName(status_code)
+    api_status = map_solver_status_to_api(status_name)
+
+    x_values: Dict[Tuple[int, int, int], int] = {}
+    hours_per_employee = {name: 0.0 for name in artifacts.employees}
+
+    if status_name in ("OPTIMAL", "FEASIBLE"):
+        for e, emp_name in enumerate(artifacts.employees):
+            total_slots = 0
+            for d in range(artifacts.num_days):
+                for s in range(artifacts.num_slots):
+                    value = int(solver.Value(artifacts.x[(e, d, s)]))
+                    x_values[(e, d, s)] = value
+                    total_slots += value
+            hours_per_employee[emp_name] = total_slots * artifacts.slot_minutes / 60.0
+
+    return WeeklySolveOutput(
+        solver_status=status_name,
+        api_status=api_status,
+        wall_time_seconds=elapsed,
+        num_variables=len(artifacts.model.Proto().variables),
+        num_constraints=len(artifacts.model.Proto().constraints),
+        x_values=x_values,
+        hours_per_employee=hours_per_employee,
+    )

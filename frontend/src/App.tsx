@@ -12,21 +12,20 @@ type EmployeeInput = {
 };
 
 const App = () => {
-  const [coverageLevel, setCoverageLevel] = useState<"low" | "standard" | "high">("standard");
-  const [opticianRequirement, setOpticianRequirement] = useState<
-    "required" | "recommended" | "none"
-  >("recommended");
-  const [contractPriority, setContractPriority] = useState<1 | 2 | 3>(2);
-  const [equityPriority, setEquityPriority] = useState<"low" | "standard" | "high">(
-    "standard",
+  const [coverageLevel, setCoverageLevel] = useState<"standard" | "high">("standard");
+  const [planningPriority, setPlanningPriority] = useState<
+    "team_balance" | "store_performance" | "strict_contracts"
+  >("team_balance");
+  const [opticianRequirement, setOpticianRequirement] = useState<"required" | "recommended">(
+    "recommended",
   );
   const [employees, setEmployees] = useState<EmployeeInput[]>([
     { name: "Employee 1", weekly_hours: 35, role: "opticien" },
   ]);
   const [weekStartDate, setWeekStartDate] = useState("2026-03-02");
-  const [numberOfDays, setNumberOfDays] = useState(6);
-  const [openingStartMinutes, setOpeningStartMinutes] = useState(570);
-  const [openingEndMinutes, setOpeningEndMinutes] = useState(1215);
+  const [numberOfDays, setNumberOfDays] = useState(28);
+  const [openingStartTime, setOpeningStartTime] = useState("09:30");
+  const [openingEndTime, setOpeningEndTime] = useState("20:15");
 
   const [planningResult, setPlanningResult] = useState<PlanningResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -45,7 +44,26 @@ const App = () => {
     });
   };
 
+  const hhmmToMinutes = (value: string) => {
+    const [hours, minutes] = value.split(":").map(Number);
+    if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+      return 0;
+    }
+    return (hours * 60) + minutes;
+  };
+
+  const buildPlanningPriorities = () => {
+    if (planningPriority === "store_performance") {
+      return { contract_priority: 1 as const, equity_priority: "low" as const };
+    }
+    if (planningPriority === "strict_contracts") {
+      return { contract_priority: 3 as const, equity_priority: "standard" as const };
+    }
+    return { contract_priority: 2 as const, equity_priority: "high" as const };
+  };
+
   const buildPayload = (): PlanningRequest => {
+    const priorities = buildPlanningPriorities();
     return {
       employees: employees.map((employee) => employee.name),
       contracts: employees.map((employee) => employee.weekly_hours),
@@ -55,11 +73,13 @@ const App = () => {
       config: {
         coverage_level: coverageLevel,
         optician_requirement: opticianRequirement,
-        contract_priority: contractPriority,
-        equity_priority: equityPriority,
+        contract_priority: priorities.contract_priority,
+        equity_priority: priorities.equity_priority,
+        closed_weekdays: [6],
+        start_date: weekStartDate,
         schedule: {
-          start_time_minutes: openingStartMinutes,
-          end_time_minutes: openingEndMinutes,
+          start_time_minutes: hhmmToMinutes(openingStartTime),
+          end_time_minutes: hhmmToMinutes(openingEndTime),
         },
       },
       previous_month_stats: undefined,
@@ -94,23 +114,21 @@ const App = () => {
       <main className="app__content">
         <DecisionPanel
           coverageLevel={coverageLevel}
+          planningPriority={planningPriority}
           opticianRequirement={opticianRequirement}
-          contractPriority={contractPriority}
-          equityPriority={equityPriority}
           employees={employees}
           weekStartDate={weekStartDate}
           numberOfDays={numberOfDays}
-          openingStartMinutes={openingStartMinutes}
-          openingEndMinutes={openingEndMinutes}
+          openingStartTime={openingStartTime}
+          openingEndTime={openingEndTime}
           onCoverageChange={setCoverageLevel}
+          onPlanningPriorityChange={setPlanningPriority}
           onOpticianChange={setOpticianRequirement}
-          onContractPriorityChange={setContractPriority}
-          onEquityPriorityChange={setEquityPriority}
           onEmployeesChange={setEmployees}
           onWeekStartDateChange={setWeekStartDate}
           onNumberOfDaysChange={setNumberOfDays}
-          onOpeningStartMinutesChange={setOpeningStartMinutes}
-          onOpeningEndMinutesChange={setOpeningEndMinutes}
+          onOpeningStartTimeChange={setOpeningStartTime}
+          onOpeningEndTimeChange={setOpeningEndTime}
           onGenerate={handleGenerate}
           loading={loading}
         />

@@ -1,7 +1,8 @@
 import sys
 import time
 from src.validation import validate_global_feasibility
-from src.model_builder_v1 import build_and_solve_v1, _sum_ranges_hours
+# LEGACY ENGINE - DO NOT USE
+# from src.model_builder_v1 import build_and_solve_v1, _sum_ranges_hours
 from src.hard_constraints import get_weeks
 
 
@@ -75,6 +76,126 @@ def _verify_hours_coherence(result):
             f"Incohérence total {emp_name}: "
             f"somme jours={sum_daily}h != total_hours={emp_data['total_hours']}h"
         )
+
+
+def _worked_hours_with_internal(result, emp_name):
+    coverage_h = result["schedule"].get(emp_name, {}).get("total_hours", 0.0)
+    internal_h = result.get("internal_hours_per_employee", {}).get(emp_name, 0.0)
+    return coverage_h + internal_h
+
+
+def _print_contract_vs_worked(employees, contracts, result):
+    for i, emp in enumerate(employees):
+        worked_h = _worked_hours_with_internal(result, emp)
+        delta = worked_h - contracts[i]
+        print(
+            f"  {emp}: contract_hours={contracts[i]:.2f}, "
+            f"worked_hours={worked_h:.2f}, delta={delta:+.2f}"
+        )
+
+
+def test_contract_minimum_hard_volume_sufficient():
+    employees = ["Alice", "Bob"]
+    days = ["Lun"]
+    contracts = [2, 2]
+    config = {
+        "schedule": {
+            "start_time_minutes": 9 * 60,
+            "end_time_minutes": 13 * 60,
+            "slot_minutes": 60,
+            "min_staff_per_slot": 1,
+        },
+        "hard_constraints": {
+            "require_qualified_optician": False,
+        },
+        "soft_weights": {
+            "hours_balancing": 0,
+            "contract_target": 0,
+            "contiguity": 0,
+            "saturday_fairness": 0,
+        },
+        "solver": {"max_time_seconds": 10},
+    }
+
+    result = build_and_solve_v1(employees, days, contracts, config)
+    assert "error" not in result, f"Solveur échoué: {result}"
+    for i, emp in enumerate(employees):
+        worked_h = _worked_hours_with_internal(result, emp)
+        assert worked_h >= contracts[i] - 1e-9, (
+            f"{emp}: minimum contractuel non respecté "
+            f"({worked_h:.2f}h < {contracts[i]:.2f}h)"
+        )
+
+    print("TEST CONTRAT 1 OK : volume suffisant (FEASIBLE)")
+    _print_contract_vs_worked(employees, contracts, result)
+
+
+def test_contract_minimum_hard_volume_insufficient():
+    employees = ["Alice"]
+    days = ["Lun"]
+    contracts = [6]
+    config = {
+        "schedule": {
+            "start_time_minutes": 9 * 60,
+            "end_time_minutes": 13 * 60,
+            "slot_minutes": 60,
+            "min_staff_per_slot": 1,
+        },
+        "hard_constraints": {
+            "require_qualified_optician": False,
+        },
+        "soft_weights": {
+            "hours_balancing": 0,
+            "contract_target": 0,
+            "contiguity": 0,
+            "saturday_fairness": 0,
+        },
+        "solver": {"max_time_seconds": 10},
+    }
+
+    result = build_and_solve_v1(employees, days, contracts, config)
+    assert "error" in result, "Le solveur aurait dû retourner INFEASIBLE"
+    assert result.get("metrics", {}).get("solver_status") == "INFEASIBLE", (
+        f"Statut inattendu: {result.get('metrics', {}).get('solver_status')}"
+    )
+
+    print("TEST CONTRAT 2 OK : volume insuffisant (INFEASIBLE)")
+    print(f"  Alice: contract_hours={contracts[0]:.2f}, worked_hours=N/A, delta=N/A")
+
+
+def test_contract_minimum_hard_exact_limit():
+    employees = ["Alice"]
+    days = ["Lun"]
+    contracts = [4]
+    config = {
+        "schedule": {
+            "start_time_minutes": 9 * 60,
+            "end_time_minutes": 13 * 60,
+            "slot_minutes": 60,
+            "min_staff_per_slot": 1,
+        },
+        "hard_constraints": {
+            "require_qualified_optician": False,
+        },
+        "soft_weights": {
+            "hours_balancing": 0,
+            "contract_target": 0,
+            "contiguity": 0,
+            "saturday_fairness": 0,
+        },
+        "solver": {"max_time_seconds": 10},
+    }
+
+    result = build_and_solve_v1(employees, days, contracts, config)
+    assert "error" not in result, f"Solveur échoué: {result}"
+
+    worked_h = _worked_hours_with_internal(result, "Alice")
+    assert abs(worked_h - contracts[0]) < 1e-9, (
+        f"Alice: attendu exactement {contracts[0]:.2f}h, obtenu {worked_h:.2f}h"
+    )
+
+    print("TEST CONTRAT 3 OK : cas limite exact")
+    _print_contract_vs_worked(employees, contracts, result)
 
 
 def test_hours_coherence_standard():
@@ -167,7 +288,8 @@ def test_rest_between_days():
     result = build_and_solve_v1(employees, days, contracts, config)
     assert "error" not in result
     _verify_hours_coherence(result)
-    from src.model_builder_v1 import _hhmm_to_minutes
+    # LEGACY ENGINE - DO NOT USE
+    # from src.model_builder_v1 import _hhmm_to_minutes
     for emp_name, emp_data in result["schedule"].items():
         if "Lun" in emp_data["days"] and "Mar" in emp_data["days"]:
             lun_ranges = emp_data["days"]["Lun"]["ranges"]
@@ -264,7 +386,8 @@ def test_unavailability_slot():
     _verify_hours_coherence(result)
     alice_data = result["schedule"]["Alice"]
     if "Lun" in alice_data["days"]:
-        from src.model_builder_v1 import _hhmm_to_minutes
+        # LEGACY ENGINE - DO NOT USE
+        # from src.model_builder_v1 import _hhmm_to_minutes
         for r in alice_data["days"]["Lun"]["ranges"]:
             assert _hhmm_to_minutes(r["start"]) > 9 * 60, (
                 "Alice ne devrait pas travailler au créneau 09:00"
@@ -713,6 +836,9 @@ if __name__ == "__main__":
         test_feasible_simple,
         test_impossible_insufficient_hours,
         test_limit_case_exact_match,
+        test_contract_minimum_hard_volume_sufficient,
+        test_contract_minimum_hard_volume_insufficient,
+        test_contract_minimum_hard_exact_limit,
         test_hours_coherence_standard,
         test_hours_coherence_many_employees,
         test_hours_coherence_min_staff_2,

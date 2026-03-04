@@ -3,7 +3,8 @@ from typing import Any, Dict, List, Optional
 
 from src.config import load_config
 from src.validation import validate_global_feasibility
-from src.model_builder_v1 import build_and_solve_v1
+# LEGACY ENGINE - DO NOT USE
+# from src.model_builder_v1 import build_and_solve_v1
 
 
 def _deep_merge(base: Dict[str, Any], overrides: Dict[str, Any]) -> None:

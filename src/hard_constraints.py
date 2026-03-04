@@ -24,7 +24,14 @@ def add_min_coverage(model, x, num_employees, num_days, num_slots, min_staff):
 def add_max_weekly_hours(model, x, num_employees, num_days, num_slots, contracts, slot_minutes, internal=None):
     weeks = get_weeks(num_days)
     for e in range(num_employees):
-        max_slots = contracts[e] * 60 // slot_minutes
+        weekly_hours = contracts[e]
+        max_slots = weekly_hours * 60 // slot_minutes
+        print(
+            "Employee", e,
+            "weekly_hours:", weekly_hours,
+            "slot_minutes:", slot_minutes,
+            "computed max_slots:", max_slots
+        )
         for week_days in weeks:
             week_slots = sum(
                 x[(e, d, s)] + (internal[(e, d, s)] if internal is not None else 0)
@@ -45,7 +52,10 @@ def add_max_days_per_week(model, x, num_employees, num_days, num_slots, max_days
                 model.Add(daily_slots >= 1).OnlyEnforceIf(worked)
                 model.Add(daily_slots == 0).OnlyEnforceIf(worked.Not())
                 day_worked_vars.append(worked)
-            model.Add(sum(day_worked_vars) <= max_days)
+            week_idx = week_days[0] // 7
+            worked_days_week = model.NewIntVar(0, len(week_days), f"worked_days_week_{e}_{week_idx}")
+            model.Add(worked_days_week == sum(day_worked_vars))
+            model.Add(worked_days_week <= max_days)
 
 
 def _build_prefix_sums(model, x, e, d, num_slots, name_prefix):
@@ -134,6 +144,23 @@ def add_min_daily_work_duration(model, x, num_employees, num_days, num_slots,
             model.Add(daily_slots >= min_daily_slots).OnlyEnforceIf(day_worked)
 
 
+def add_single_contiguous_block_per_day(model, x, num_employees, num_days, num_slots, work=None):
+    activity = work or x
+    for e in range(num_employees):
+        for d in range(num_days):
+            start_flags = []
+            for s in range(1, num_slots):
+                start_flag = model.NewBoolVar(f"start_flag_{e}_{d}_{s}")
+                # start_flag_s = 1 iff activity[s] == 1 and activity[s-1] == 0
+                model.Add(start_flag <= activity[(e, d, s)])
+                model.Add(start_flag <= 1 - activity[(e, d, s - 1)])
+                model.Add(start_flag >= activity[(e, d, s)] - activity[(e, d, s - 1)])
+                start_flags.append(start_flag)
+
+            starts_count = activity[(e, d, 0)] + sum(start_flags)
+            model.Add(starts_count <= 1)
+
+
 def add_max_daily_hours(model, x, num_employees, num_days, num_slots,
                         slot_minutes, max_daily_minutes=600, work=None):
     max_daily_slots = max_daily_minutes // slot_minutes
@@ -143,15 +170,18 @@ def add_max_daily_hours(model, x, num_employees, num_days, num_slots,
             model.Add(daily_slots <= max_daily_slots)
 
 
-def add_qualified_optician_coverage(model, x, num_employees, num_days, num_slots, roles):
+def add_qualified_optician_coverage(model, x, num_employees, num_days, num_slots, roles, closed_days=None):
     optician_indices = [e for e in range(num_employees) if roles[e] == "opticien"]
     if not optician_indices:
         raise ValueError("Aucun opticien diplômé dans l'équipe — RULE 5.1 impossible.")
+    closed_days_set = set(closed_days or [])
+    opening_slot = 0
+    closing_slot = num_slots - 1
     for d in range(num_days):
-        for s in range(num_slots):
-            model.Add(
-                sum(x[(e, d, s)] for e in optician_indices) >= 1
-            )
+        if d in closed_days_set:
+            continue
+        model.Add(sum(x[(e, d, opening_slot)] for e in optician_indices) >= 1)
+        model.Add(sum(x[(e, d, closing_slot)] for e in optician_indices) >= 1)
 
 
 def add_unavailabilities(model, x, unavailabilities, num_slots, internal=None):

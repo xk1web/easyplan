@@ -1,47 +1,43 @@
 type DecisionPanelProps = {
-  coverageLevel: "low" | "standard" | "high";
-  opticianRequirement: "required" | "recommended" | "none";
-  contractPriority: 1 | 2 | 3;
-  equityPriority: "low" | "standard" | "high";
+  coverageLevel: "standard" | "high";
+  planningPriority: "team_balance" | "store_performance" | "strict_contracts";
+  opticianRequirement: "required" | "recommended";
   employees: { name: string; weekly_hours: number; role: "opticien" | "vendeur" }[];
   weekStartDate: string;
   numberOfDays: number;
-  openingStartMinutes: number;
-  openingEndMinutes: number;
-  onCoverageChange: (value: "low" | "standard" | "high") => void;
-  onOpticianChange: (value: "required" | "recommended" | "none") => void;
-  onContractPriorityChange: (value: 1 | 2 | 3) => void;
-  onEquityPriorityChange: (value: "low" | "standard" | "high") => void;
+  openingStartTime: string;
+  openingEndTime: string;
+  onCoverageChange: (value: "standard" | "high") => void;
+  onPlanningPriorityChange: (value: "team_balance" | "store_performance" | "strict_contracts") => void;
+  onOpticianChange: (value: "required" | "recommended") => void;
   onEmployeesChange: (
     value: { name: string; weekly_hours: number; role: "opticien" | "vendeur" }[],
   ) => void;
   onWeekStartDateChange: (value: string) => void;
   onNumberOfDaysChange: (value: number) => void;
-  onOpeningStartMinutesChange: (value: number) => void;
-  onOpeningEndMinutesChange: (value: number) => void;
+  onOpeningStartTimeChange: (value: string) => void;
+  onOpeningEndTimeChange: (value: string) => void;
   onGenerate: () => void;
   loading: boolean;
 };
 
 const DecisionPanel = ({
   coverageLevel,
+  planningPriority,
   opticianRequirement,
-  contractPriority,
-  equityPriority,
   employees,
   weekStartDate,
   numberOfDays,
-  openingStartMinutes,
-  openingEndMinutes,
+  openingStartTime,
+  openingEndTime,
   onCoverageChange,
+  onPlanningPriorityChange,
   onOpticianChange,
-  onContractPriorityChange,
-  onEquityPriorityChange,
   onEmployeesChange,
   onWeekStartDateChange,
   onNumberOfDaysChange,
-  onOpeningStartMinutesChange,
-  onOpeningEndMinutesChange,
+  onOpeningStartTimeChange,
+  onOpeningEndTimeChange,
   onGenerate,
   loading,
 }: DecisionPanelProps) => {
@@ -72,63 +68,68 @@ const DecisionPanel = ({
 
   return (
     <section className="panel">
-      <h2>Decision Panel</h2>
-      <div className="panel__grid">
-        <label>
-          Coverage level
-          <select value={coverageLevel} onChange={(event) => onCoverageChange(event.target.value as DecisionPanelProps["coverageLevel"])}>
-            <option value="low">Low</option>
-            <option value="standard">Standard</option>
-            <option value="high">High</option>
-          </select>
-        </label>
+      <h2>Pilotage Planning</h2>
 
-        <label>
-          Optician requirement
-          <select
-            value={opticianRequirement}
-            onChange={(event) =>
-              onOpticianChange(event.target.value as DecisionPanelProps["opticianRequirement"])
-            }
-          >
-            <option value="required">Required</option>
-            <option value="recommended">Recommended</option>
-            <option value="none">None</option>
-          </select>
-        </label>
+      <div className="decision-section">
+        <h3>Configuration magasin</h3>
+        <div className="panel__grid">
+          <label>
+            Date de début
+            <input
+              type="date"
+              value={weekStartDate}
+              onChange={(event) => onWeekStartDateChange(event.target.value)}
+            />
+          </label>
 
-        <label>
-          Contract priority
-          <select
-            value={contractPriority}
-            onChange={(event) => onContractPriorityChange(Number(event.target.value) as 1 | 2 | 3)}
-          >
-            <option value={1}>Priority 1</option>
-            <option value={2}>Priority 2</option>
-            <option value={3}>Priority 3</option>
-          </select>
-        </label>
+          <label>
+            Nombre de jours
+            <input
+              type="number"
+              min={1}
+              value={numberOfDays}
+              onChange={(event) => onNumberOfDaysChange(Number(event.target.value))}
+            />
+          </label>
 
-        <label>
-          Equity priority
-          <select
-            value={equityPriority}
-            onChange={(event) =>
-              onEquityPriorityChange(event.target.value as DecisionPanelProps["equityPriority"])
-            }
-          >
-            <option value="low">Low</option>
-            <option value="standard">Standard</option>
-            <option value="high">High</option>
-          </select>
-        </label>
+          <label>
+            Opening start
+            <input
+              type="time"
+              value={openingStartTime}
+              onChange={(event) => onOpeningStartTimeChange(event.target.value)}
+            />
+          </label>
+
+          <label>
+            Opening end
+            <input
+              type="time"
+              value={openingEndTime}
+              onChange={(event) => onOpeningEndTimeChange(event.target.value)}
+            />
+          </label>
+
+          <label>
+            Niveau de couverture
+            <select
+              value={coverageLevel}
+              onChange={(event) => onCoverageChange(event.target.value as DecisionPanelProps["coverageLevel"])}
+            >
+              <option value="standard">Standard</option>
+              <option value="high">Renforcé</option>
+            </select>
+          </label>
+        </div>
       </div>
 
-      <div className="panel__grid">
+      <div className="decision-section">
+        <h3>Équipe</h3>
+        <div className="panel__grid">
         {employees.map((employee, index) => (
-          <div key={`${employee.name}-${index}`} className="panel__stack">
+          <div key={`${employee.name}-${index}`} className="card panel__stack">
             <label>
-              Employee name
+              Nom
               <input
                 type="text"
                 value={employee.name}
@@ -139,7 +140,7 @@ const DecisionPanel = ({
             </label>
 
             <label>
-              Weekly hours
+              Contrat (heures semaine)
               <input
                 type="number"
                 value={employee.weekly_hours}
@@ -150,7 +151,7 @@ const DecisionPanel = ({
             </label>
 
             <label>
-              Role
+              Rôle
               <select
                 value={employee.role}
                 onChange={(event) =>
@@ -167,55 +168,52 @@ const DecisionPanel = ({
             </label>
 
             <button type="button" onClick={() => handleRemoveEmployee(index)}>
-              Remove employee
+              Supprimer employé
             </button>
           </div>
         ))}
+        </div>
+        <div className="panel__actions">
+          <button type="button" onClick={handleAddEmployee}>
+            Ajouter un employé
+          </button>
+        </div>
       </div>
 
-      <div className="panel__grid">
+      <div className="decision-section">
+        <h3>Stratégie planning</h3>
+        <div className="panel__grid">
         <label>
-          Week start date
-          <input
-            type="date"
-            value={weekStartDate}
-            onChange={(event) => onWeekStartDateChange(event.target.value)}
-          />
+          Priorité planning
+          <select
+            value={planningPriority}
+            onChange={(event) =>
+              onPlanningPriorityChange(event.target.value as DecisionPanelProps["planningPriority"])
+            }
+          >
+            <option value="team_balance">Équilibre équipe</option>
+            <option value="store_performance">Performance magasin</option>
+            <option value="strict_contracts">Respect strict contrats</option>
+          </select>
         </label>
 
         <label>
-          Number of days
-          <input
-            type="number"
-            min={1}
-            value={numberOfDays}
-            onChange={(event) => onNumberOfDaysChange(Number(event.target.value))}
-          />
-        </label>
-
-        <label>
-          Opening start (minutes)
-          <input
-            type="number"
-            value={openingStartMinutes}
-            onChange={(event) => onOpeningStartMinutesChange(Number(event.target.value))}
-          />
-        </label>
-
-        <label>
-          Opening end (minutes)
-          <input
-            type="number"
-            value={openingEndMinutes}
-            onChange={(event) => onOpeningEndMinutesChange(Number(event.target.value))}
-          />
+          Exigence opticien
+          <select
+            value={opticianRequirement}
+            onChange={(event) =>
+              onOpticianChange(event.target.value as DecisionPanelProps["opticianRequirement"])
+            }
+          >
+            <option value="required">Obligatoire</option>
+            <option value="recommended">Recommandé</option>
+          </select>
         </label>
       </div>
+      </div>
+
       <div className="panel__actions">
-        <button type="button" onClick={handleAddEmployee}>
-          Add employee
-        </button>
-        <button type="button" onClick={onGenerate} disabled={loading}>
+        <button type="button" className="button--primary" onClick={onGenerate} disabled={loading}>
           {loading ? "Generating..." : "Generate"}
         </button>
       </div>

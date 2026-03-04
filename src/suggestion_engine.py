@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Optional, Tuple
+from datetime import date, timedelta
 
 
 def compute_coverage_hours(config: dict, num_days: int) -> float:
@@ -8,11 +9,32 @@ def compute_coverage_hours(config: dict, num_days: int) -> float:
     end_time_minutes = sched.get("end_time_minutes", 20 * 60 + 15)
     min_staff = sched.get("min_staff_per_slot", 1)
     min_staff_per_day = sched.get("min_staff_per_day")
+    closed_weekdays = set(config.get("closed_weekdays", []))
+    start_date_str = config.get("start_date")
+    start_date = None
+    if isinstance(start_date_str, str):
+        try:
+            start_date = date.fromisoformat(start_date_str)
+        except ValueError:
+            start_date = None
+    closed_day_indices = []
+    for d in range(num_days):
+        if start_date is not None:
+            weekday_index = (start_date + timedelta(days=d)).weekday()
+        else:
+            weekday_index = d % 7
+        if weekday_index in closed_weekdays:
+            closed_day_indices.append(d)
     num_slots = (end_time_minutes - start_time_minutes) // slot_minutes
     if isinstance(min_staff_per_day, (list, tuple)) and len(min_staff_per_day) == num_days:
-        total_required_slots = sum(min_staff_per_day) * num_slots
+        total_required_slots = 0
+        for d in range(num_days):
+            if d in closed_day_indices:
+                continue
+            total_required_slots += int(min_staff_per_day[d]) * num_slots
     else:
-        total_required_slots = num_days * num_slots * min_staff
+        open_days_count = num_days - len(closed_day_indices)
+        total_required_slots = open_days_count * num_slots * min_staff
     return total_required_slots * slot_minutes / 60.0
 
 

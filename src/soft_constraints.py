@@ -99,7 +99,7 @@ def add_contract_target_penalty(model, x, num_employees, num_days, num_slots,
         if contracts[e] <= 0:
             continue
 
-        contract_slots_e = int(round(contracts[e] * 60 / slot_minutes * (num_days / 7.0)))
+        contract_slots_e = int(round(contracts[e] * 60 / slot_minutes))
         contract_slots_e = min(contract_slots_e, num_days * num_slots)
 
         emp_slots = sum(
@@ -122,6 +122,39 @@ def add_contract_target_penalty(model, x, num_employees, num_days, num_slots,
             penalties.append((over, weight_over))
 
     return penalties, deviation_terms
+
+
+def add_contract_minimum_constraint(
+    model,
+    x,
+    num_employees,
+    num_days,
+    num_slots,
+    contracts,
+    slot_minutes,
+):
+    """
+    Enforce that each employee works at least their weekly contract hours.
+    No prorata by num_days.
+    """
+
+    for e in range(num_employees):
+        if contracts[e] <= 0:
+            continue
+
+        contract_minutes_e = int(contracts[e] * 60)
+
+        daily_worked_slots = [
+            cp_model.LinearExpr.Sum(
+                [
+                    x[(e, d, s)]
+                    for s in range(num_slots)
+                ]
+            )
+            for d in range(num_days)
+        ]
+        total_worked_slots = cp_model.LinearExpr.Sum(daily_worked_slots)
+        model.Add(total_worked_slots * slot_minutes >= contract_minutes_e)
 
 
 def add_max_daily_hours_penalty(model, x, num_employees, num_days, num_slots,
@@ -163,6 +196,251 @@ def add_target_staffing_penalty(model, x, num_employees, num_days, num_slots,
             shortfall = model.NewIntVar(0, num_employees, f"understaff_{d}_{s}")
             model.Add(shortfall >= target_staff_per_slot - assigned)
             penalties.append((shortfall, weight))
+    return penalties
+
+
+def add_hourly_demand_reward(
+    model,
+    x,
+    num_employees,
+    num_days,
+    num_slots,
+    slot_weights,
+    reward_weight=1,
+):
+    """
+    Reward coverage on high-demand slots.
+    Returned terms use negative coefficients so they reduce the minimization objective.
+    """
+    penalties = []
+    if reward_weight <= 0:
+        return penalties
+
+    for d in range(num_days):
+        for s in range(num_slots):
+            slot_w = slot_weights[s] if s < len(slot_weights) else 1
+            if slot_w <= 0:
+                continue
+            coverage_count = model.NewIntVar(0, num_employees, f"demand_cov_{d}_{s}")
+            model.Add(coverage_count == sum(x[(e, d, s)] for e in range(num_employees)))
+            penalties.append((coverage_count, -int(reward_weight * slot_w)))
+    return penalties
+
+
+def add_days_concentration_penalty(
+    model,
+    x,
+    num_employees,
+    num_days,
+    num_slots,
+    target_days=5,
+    weight=3,
+):
+    penalties = []
+    for e in range(num_employees):
+        worked_day_vars = []
+        for d in range(num_days):
+            worked_day = model.NewBoolVar(f"worked_day_{e}_{d}")
+            daily_slots = sum(x[(e, d, s)] for s in range(num_slots))
+            model.Add(daily_slots >= 1).OnlyEnforceIf(worked_day)
+            model.Add(daily_slots == 0).OnlyEnforceIf(worked_day.Not())
+            worked_day_vars.append(worked_day)
+
+        total_worked_days = sum(worked_day_vars)
+        penalty_days = model.NewIntVar(0, num_days, f"penalty_days_{e}")
+        model.Add(penalty_days >= total_worked_days - target_days)
+        penalties.append((penalty_days, weight))
+
+    return penalties
+
+
+def add_daily_balance_penalty(
+    model,
+    x,
+    contracts,
+    num_employees,
+    num_days,
+    num_slots,
+    slot_minutes,
+    target_days=5,
+    tolerance_minutes=60,
+    weight=4,
+):
+    penalties = []
+    if weight <= 0 or target_days <= 0:
+        return penalties
+    tolerance_slots = max(0, (tolerance_minutes + slot_minutes - 1) // slot_minutes)
+
+    for e in range(num_employees):
+        target_daily_slots = int(round((contracts[e] * 60 / slot_minutes) / target_days))
+        for d in range(num_days):
+            daily_slots = sum(x[(e, d, s)] for s in range(num_slots))
+            worked_day = model.NewBoolVar(f"daily_balance_worked_day_{e}_{d}")
+            model.Add(daily_slots >= 1).OnlyEnforceIf(worked_day)
+            model.Add(daily_slots == 0).OnlyEnforceIf(worked_day.Not())
+
+            raw_deviation = model.NewIntVar(0, num_slots, f"daily_balance_raw_deviation_{e}_{d}")
+            model.Add(raw_deviation >= daily_slots - target_daily_slots)
+            model.Add(raw_deviation >= target_daily_slots - daily_slots)
+            model.Add(raw_deviation == 0).OnlyEnforceIf(worked_day.Not())
+
+            effective_deviation = model.NewIntVar(0, num_slots, f"daily_balance_effective_deviation_{e}_{d}")
+            model.Add(effective_deviation >= raw_deviation - tolerance_slots)
+            model.Add(effective_deviation >= 0)
+            model.Add(effective_deviation == 0).OnlyEnforceIf(worked_day.Not())
+            penalties.append((effective_deviation, weight))
+
+    return penalties
+
+
+def add_long_day_requirement_penalty(
+    model,
+    x,
+    num_employees,
+    num_days,
+    num_slots,
+    slot_minutes,
+    threshold_minutes=420,
+    min_long_days=1,
+    weight=5,
+):
+    penalties = []
+    if weight <= 0 or threshold_minutes <= 0 or min_long_days <= 0:
+        return penalties
+
+    threshold_slots = max(1, threshold_minutes // slot_minutes)
+
+    for e in range(num_employees):
+        long_day_flags = []
+        for d in range(num_days):
+            daily_slots = sum(x[(e, d, s)] for s in range(num_slots))
+            is_long_day = model.NewBoolVar(f"is_long_day_{e}_{d}")
+            model.Add(daily_slots >= threshold_slots).OnlyEnforceIf(is_long_day)
+            model.Add(daily_slots <= threshold_slots - 1).OnlyEnforceIf(is_long_day.Not())
+            long_day_flags.append(is_long_day)
+
+        total_long_days = model.NewIntVar(0, num_days, f"total_long_days_{e}")
+        model.Add(total_long_days == sum(long_day_flags))
+
+        shortage = model.NewIntVar(0, min_long_days, f"long_day_shortage_{e}")
+        model.Add(shortage >= min_long_days - total_long_days)
+        penalties.append((shortage, weight))
+
+    return penalties
+
+
+def add_non_template_penalty(
+    model,
+    x,
+    num_employees,
+    num_days,
+    num_slots,
+    start_time_minutes,
+    end_time_minutes,
+    slot_minutes,
+    shift_templates,
+    weight=3,
+    template_deviation_weight=1,
+    shift_type_presence_weight=2,
+):
+    penalties = []
+    if weight <= 0 or not isinstance(shift_templates, list):
+        return penalties
+
+    valid_templates = []
+    for template in shift_templates:
+        if not isinstance(template, dict):
+            continue
+        try:
+            t_name = str(template.get("name", "")).strip().lower()
+            t_start = int(template.get("start"))
+            t_end = int(template.get("end"))
+        except (TypeError, ValueError):
+            continue
+        if t_end <= t_start:
+            continue
+        if t_start < start_time_minutes or t_end > end_time_minutes:
+            continue
+        if (t_start - start_time_minutes) % slot_minutes != 0:
+            continue
+        if (t_end - start_time_minutes) % slot_minutes != 0:
+            continue
+
+        start_slot = (t_start - start_time_minutes) // slot_minutes
+        end_slot = (t_end - start_time_minutes) // slot_minutes
+        if start_slot < 0 or end_slot > num_slots or end_slot <= start_slot:
+            continue
+        valid_templates.append((t_name, start_slot, end_slot))
+
+    if not valid_templates:
+        return penalties
+
+    for e in range(num_employees):
+        shift_choices_by_template = [[] for _ in valid_templates]
+        for d in range(num_days):
+            daily_slots = sum(x[(e, d, s)] for s in range(num_slots))
+            worked_day = model.NewBoolVar(f"tpl_worked_day_{e}_{d}")
+            model.Add(daily_slots >= 1).OnlyEnforceIf(worked_day)
+            model.Add(daily_slots == 0).OnlyEnforceIf(worked_day.Not())
+            daily_minutes = model.NewIntVar(0, num_slots * slot_minutes, f"daily_minutes_{e}_{d}")
+            model.Add(daily_minutes == daily_slots * slot_minutes)
+
+            shift_choices = []
+            duration_deviations = []
+            for t_idx, (_, start_slot, end_slot) in enumerate(valid_templates):
+                choice = model.NewBoolVar(f"shift_choice_{e}_{d}_{t_idx}")
+                shift_choices.append(choice)
+                shift_choices_by_template[t_idx].append(choice)
+                for s in range(num_slots):
+                    expected = 1 if start_slot <= s < end_slot else 0
+                    model.Add(x[(e, d, s)] == expected).OnlyEnforceIf(choice)
+
+                template_minutes = (end_slot - start_slot) * slot_minutes
+                deviation_t = model.NewIntVar(
+                    0,
+                    num_slots * slot_minutes,
+                    f"template_duration_deviation_{e}_{d}_{t_idx}",
+                )
+                model.Add(deviation_t >= daily_minutes - template_minutes)
+                model.Add(deviation_t >= template_minutes - daily_minutes)
+                duration_deviations.append(deviation_t)
+
+            model.Add(sum(shift_choices) <= 1)
+
+            matched_template = model.NewBoolVar(f"matched_template_{e}_{d}")
+            model.AddMaxEquality(matched_template, shift_choices)
+
+            non_template = model.NewIntVar(0, 1, f"non_template_penalty_{e}_{d}")
+            model.Add(non_template >= worked_day - matched_template)
+            model.Add(non_template <= worked_day)
+            model.Add(non_template <= 1 - matched_template)
+            penalties.append((non_template, weight))
+
+            if template_deviation_weight > 0:
+                min_duration_deviation = model.NewIntVar(
+                    0,
+                    num_slots * slot_minutes,
+                    f"min_template_duration_deviation_{e}_{d}",
+                )
+                model.AddMinEquality(min_duration_deviation, duration_deviations)
+                template_deviation = model.NewIntVar(
+                    0,
+                    num_slots * slot_minutes,
+                    f"template_deviation_{e}_{d}",
+                )
+                model.Add(template_deviation == min_duration_deviation).OnlyEnforceIf(worked_day)
+                model.Add(template_deviation == 0).OnlyEnforceIf(worked_day.Not())
+                penalties.append((template_deviation, template_deviation_weight))
+
+        for t_idx, (template_name, _, _) in enumerate(valid_templates):
+            count_shift_type = model.NewIntVar(0, num_days, f"count_shift_type_{e}_{t_idx}")
+            model.Add(count_shift_type == sum(shift_choices_by_template[t_idx]))
+
+            if shift_type_presence_weight > 0 and template_name in ("closing", "morning"):
+                shortage = model.NewIntVar(0, 1, f"{template_name}_shortage_{e}")
+                model.Add(shortage >= 1 - count_shift_type)
+                penalties.append((shortage, shift_type_presence_weight))
+
     return penalties
 
 
@@ -241,6 +519,57 @@ def add_close_fairness(model, x, num_employees, num_days, num_slots, weight=5):
     return penalties
 
 
+def add_late_days_fairness(
+    model,
+    x,
+    num_employees,
+    num_days,
+    num_slots,
+    start_time_minutes,
+    slot_minutes,
+    late_threshold_minutes,
+    weight=5,
+):
+    penalties = []
+    if num_employees <= 0 or num_days <= 0 or num_slots <= 0:
+        return penalties
+
+    late_slot_indices = []
+    for s in range(num_slots):
+        slot_end = start_time_minutes + (s + 1) * slot_minutes
+        if slot_end > late_threshold_minutes:
+            late_slot_indices.append(s)
+
+    if not late_slot_indices:
+        return penalties
+
+    late_days_month_vars = []
+    for e in range(num_employees):
+        closing_flags = []
+        for d in range(num_days):
+            closing_flag = model.NewBoolVar(f"closing_flag_{e}_{d}")
+            late_slots = sum(x[(e, d, s)] for s in late_slot_indices)
+            model.Add(late_slots >= 1).OnlyEnforceIf(closing_flag)
+            model.Add(late_slots == 0).OnlyEnforceIf(closing_flag.Not())
+            closing_flags.append(closing_flag)
+
+        late_days_month = model.NewIntVar(0, num_days, f"late_days_month_{e}")
+        model.Add(late_days_month == sum(closing_flags))
+        late_days_month_vars.append(late_days_month)
+
+    max_late_days = model.NewIntVar(0, num_days, "max_late_days_month")
+    min_late_days = model.NewIntVar(0, num_days, "min_late_days_month")
+    for e in range(num_employees):
+        model.Add(max_late_days >= late_days_month_vars[e])
+        model.Add(min_late_days <= late_days_month_vars[e])
+
+    fairness_gap = model.NewIntVar(0, num_days, "fairness_gap")
+    model.Add(fairness_gap == max_late_days - min_late_days)
+    penalties.append((fairness_gap, weight))
+
+    return penalties
+
+
 def _daily_amplitude_slots(model, x, e, d, num_slots):
     start_candidates = []
     end_candidates = []
@@ -304,7 +633,9 @@ def add_contiguity_preference(model, activity, num_employees, num_days, num_slot
                 gap_reopens.append(sb)
 
             excess = model.NewIntVar(0, num_slots, f"excess_{e}_{d}")
-            model.Add(excess >= activity[(e, d, 0)] + sum(gap_reopens) - 1)
+            # Number of 0->1 transitions equals number of contiguous worked segments.
+            # Penalize only above two segments to keep a light flexibility.
+            model.Add(excess >= activity[(e, d, 0)] + sum(gap_reopens) - 2)
             model.AddHint(excess, 0)
             penalties.append((excess, weight))
     return penalties
