@@ -60,14 +60,18 @@ class TestV1WeeklyRegression(unittest.TestCase):
     def test_case_c_structural_overstaffing(self):
         result = run_weekly_v1_engine(
             employees=["Opt1", "Opt2"],
-            contracts=[28, 28],
+            contracts=[24, 24],
             roles=["opticien", "opticien"],
             days=_days7(),
             config=_base_config(start=9 * 60, end=15 * 60, min_staff=1),
             unavailabilities=[],
         )
 
-        self.assertIn(result["metrics"]["solver_status"], ("FEASIBLE", "OPTIMAL"))
+        # With shift templates (>=6h), structural overstaffing can occur
+        # because the solver must assign full shifts.
+        # This scenario should remain FEASIBLE even if staffing exceeds
+        # the minimum coverage.
+        self.assertIn(result["status"], ("optimal", "feasible"))
         self.assertGreater(result["kpi"]["surstaffing_net"], 0.0)
 
     def test_case_d_structural_undercoverage(self):
