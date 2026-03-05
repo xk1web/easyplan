@@ -10,14 +10,34 @@ type PlanningViewProps = {
 
 const PlanningView = ({ result }: PlanningViewProps) => {
   const [viewMode, setViewMode] = useState<"table" | "list">("table");
+  const schedule = result?.schedule;
+  console.log("[DEBUG FRONTEND SCHEDULE PAYLOAD]", schedule);
+  const toNumber = (value: unknown, fallback = 0): number =>
+    typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  const kpi = result?.kpi as Record<string, unknown> | undefined;
+  const totalContractedHours = toNumber(
+    kpi?.total_contracted_hours ?? kpi?.total_heures_contractuelles,
+  );
+  const totalWorkedHours = toNumber(
+    kpi?.total_worked_hours ?? kpi?.total_heures_planifiees,
+  );
+  const totalInternalHours = toNumber(
+    kpi?.total_internal_hours ?? kpi?.total_heures_internes,
+  );
+  const coverageGapHours = toNumber(
+    kpi?.coverage_gap ?? kpi?.sous_couverture_nette,
+  );
+  const overstaffHours = toNumber(
+    kpi?.overstaff_hours ?? kpi?.surstaffing_net,
+  );
   const days = useMemo(() => {
-    if (!result?.schedule) return [];
+    if (!schedule) return [];
     const uniqueDays = new Set<string>();
-    Object.values(result.schedule).forEach((employeeData) => {
+    Object.values(schedule).forEach((employeeData) => {
       Object.keys(employeeData.days).forEach((day) => uniqueDays.add(day));
     });
     return Array.from(uniqueDays).sort((a, b) => a.localeCompare(b));
-  }, [result?.schedule]);
+  }, [schedule]);
 
   if (!result) {
     return (
@@ -40,8 +60,8 @@ const PlanningView = ({ result }: PlanningViewProps) => {
     : (result.suggestions ?? []);
   const healthStatus = (() => {
     if (!data?.kpi) return "NEUTRAL";
-    if (data.kpi.coverage_gap > 0) return "CRITICAL";
-    if (data.kpi.overstaff_hours > 0) return "OVERSTAFF";
+    if (coverageGapHours > 0) return "CRITICAL";
+    if (overstaffHours > 0) return "OVERSTAFF";
     return "OPTIMAL";
   })();
 
@@ -58,20 +78,20 @@ const PlanningView = ({ result }: PlanningViewProps) => {
               {healthStatus === "OPTIMAL" && "🟢 Balanced"}
             </strong>
           </div>
-          <div>Contracted hours: {data.kpi.total_contracted_hours.toFixed(1)}h</div>
-          <div>Worked hours: {data.kpi.total_worked_hours.toFixed(1)}h</div>
+          <div>Contracted hours: {totalContractedHours.toFixed(1)}h</div>
+          <div>Worked hours: {totalWorkedHours.toFixed(1)}h</div>
           <div>
             Contract utilization:{" "}
             {(
-              (data.kpi.total_worked_hours /
-                data.kpi.total_contracted_hours) *
+              (totalWorkedHours /
+                Math.max(1e-9, totalContractedHours)) *
               100
             ).toFixed(1)}
             %
           </div>
-          <div>Internal hours: {data.kpi.total_internal_hours.toFixed(1)}h</div>
-          <div>Coverage gap: {data.kpi.coverage_gap.toFixed(1)}h</div>
-          <div>Overstaffing: {data.kpi.overstaff_hours.toFixed(1)}h</div>
+          <div>Internal hours: {totalInternalHours.toFixed(1)}h</div>
+          <div>Coverage gap: {coverageGapHours.toFixed(1)}h</div>
+          <div>Overstaffing: {overstaffHours.toFixed(1)}h</div>
         </div>
       )}
       <div className="panel__stack">
@@ -118,7 +138,7 @@ const PlanningView = ({ result }: PlanningViewProps) => {
 
       <EmployeeLoadTable hoursPerEmployee={result.hours_per_employee ?? {}} />
 
-      {result.schedule && (
+      {schedule && (
         <div style={{ marginTop: "16px" }}>
           <h3>Weekly Details</h3>
           <div className="panel__actions">
@@ -138,9 +158,9 @@ const PlanningView = ({ result }: PlanningViewProps) => {
             </button>
           </div>
           {viewMode === "table" ? (
-            <WeeklyTableView schedule={result.schedule} days={days} />
+            <WeeklyTableView schedule={schedule} days={days} />
           ) : (
-            Object.entries(result.schedule).map(([employeeName, employeeData]) => {
+            Object.entries(schedule).map(([employeeName, employeeData]) => {
               const orderedDays = Object.entries(employeeData.days).sort(([a], [b]) =>
                 a.localeCompare(b),
               );
@@ -161,6 +181,7 @@ const PlanningView = ({ result }: PlanningViewProps) => {
                     <div>Aucun shift</div>
                   ) : (
                     orderedDays.map(([day, dayData]) => {
+                      console.log("[DEBUG FRONTEND RANGES]", employeeName, day, dayData.ranges);
                       const ranges = dayData.ranges
                         .map((range) => `${range.start}-${range.end}`)
                         .join(", ");

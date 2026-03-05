@@ -7,7 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from core.v1_weekly_engine import run_weekly_v1_engine
-from src.config import _deep_merge, load_config
 
 
 app = FastAPI(
@@ -18,7 +17,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -96,11 +98,12 @@ def health() -> Dict[str, str]:
 
 
 def _prepare_config(base_config: dict, request_config: Optional[Dict[str, Any]]) -> dict:
-    config = load_config()
-    if request_config:
-        _deep_merge(config, request_config)
+    config = {}
 
-    # V1 strict: aucune soft-constraint active.
+    if request_config:
+        config.update(request_config)
+
+    # V1 strict configuration
     config["soft_weights"] = {}
     config["long_term_equity_weight"] = 0
     config["fast_solve"] = False
@@ -126,7 +129,11 @@ def _response_from_engine_output(output: Dict[str, Any]) -> PlanningResponse:
 
 @app.post("/generate-planning", response_model=PlanningResponse)
 def generate_planning(request: PlanningRequest) -> PlanningResponse:
-    config = _prepare_config(load_config(), request.config)
+    payload = request.model_dump()
+    print("API INPUT DEBUG")
+    print("payload opening hours:", payload.get("opening_hours"))
+
+    config = _prepare_config({}, request.config)
     unavailabilities = [tuple(u) for u in request.unavailabilities] if request.unavailabilities else []
 
     try:
@@ -156,7 +163,11 @@ def generate_planning(request: PlanningRequest) -> PlanningResponse:
 
 @app.post("/adjust-planning", response_model=PlanningResponse)
 def adjust_planning(request: AdjustPlanningRequest) -> PlanningResponse:
-    config = _prepare_config(load_config(), request.config)
+    payload = request.model_dump()
+    print("API INPUT DEBUG")
+    print("payload opening hours:", payload.get("opening_hours"))
+
+    config = _prepare_config({}, request.config)
 
     employees = list(request.employees)
     contracts = list(request.contracts)

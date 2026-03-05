@@ -7,83 +7,45 @@ TimeValue = Union[int, str]
 
 MIN_SHIFT_MINUTES = 6 * 60
 CLOSING_TEMPLATES = [
-    "CLOSING_LONG",
-    "FULL_LATE",
+    "CLOSE",
+    "FULL",
 ]
 
+# Template catalog intentionally reduced for stability.
 SHIFT_TEMPLATES: Dict[str, Dict[str, Union[int, str]]] = {
-    # Tier 1 — journees dominantes
-    "FULL_OPEN": {
+    "OPEN": {
         "start_offset": 0,
-        "end_offset": 0,
+        "duration_hours": 7,
         "pause_minutes": 60,
-        "anchor": "open_close",
+        "anchor": "open",
         "tier": 1,
     },
-    "MIDDAY": {
+    "MID": {
         "start_offset": 60,
         "end_offset": -60,
+        "pause_minutes": 30,
+        "anchor": "open_close",
+        "tier": 1,
+    },
+    "CLOSE": {
+        "duration_hours": 7,
+        "end_offset": 0,
+        "pause_minutes": 60,
+        "anchor": "close",
+        "tier": 1,
+    },
+    "FULL": {
+        "start_offset": 0,
+        "end_offset": 0,
         "pause_minutes": 60,
         "anchor": "open_close",
         "tier": 1,
     },
-    "FULL_LATE": {
-        "start_offset": 90,
-        "end_offset": 0,
-        "pause_minutes": 60,
-        "anchor": "close",
-        "tier": 1,
-    },
-    "FULL_EARLY": {
-        "start_offset": 0,
-        "end_offset": -90,
-        "pause_minutes": 60,
-        "anchor": "open",
-        "tier": 1,
-    },
-    # Tier 2 — journees normales
-    "OPENING_LONG": {
-        "start_offset": 0,
-        "duration_hours": 7,
-        "pause_minutes": 60,
-        "anchor": "open",
-        "tier": 2,
-    },
-    "CLOSING_LONG": {
-        "duration_hours": 7,
-        "end_offset": 0,
-        "pause_minutes": 60,
-        "anchor": "close",
-        "tier": 2,
-    },
-    "MID_LONG": {
-        "start_offset": 120,
-        "duration_hours": 7,
-        "pause_minutes": 60,
-        "anchor": "open",
-        "tier": 2,
-    },
-    # Tier 3 — journees plus courtes
-    "SHORT_AM": {
-        "start_offset": 0,
+    "SHORT": {
         "duration_hours": 6,
         "pause_minutes": 0,
         "anchor": "open",
-        "tier": 3,
-    },
-    "SHORT_PM": {
-        "duration_hours": 6,
-        "end_offset": 0,
-        "pause_minutes": 0,
-        "anchor": "close",
-        "tier": 3,
-    },
-    "SHORT_MID": {
-        "start_offset": 120,
-        "duration_hours": 6,
-        "pause_minutes": 0,
-        "anchor": "open",
-        "tier": 3,
+        "tier": 2,
     },
 }
 
@@ -97,7 +59,13 @@ def _to_minutes(time_value: TimeValue) -> int:
     raise TypeError(f"Unsupported time format: {time_value!r}")
 
 
-def compute_template_time(template: Dict[str, Union[int, str]], open_time: TimeValue, close_time: TimeValue) -> Tuple[int, int]:
+def compute_template_time(
+    template: Dict[str, Union[int, str]],
+    open_time: TimeValue,
+    close_time: TimeValue,
+    name: str = "UNKNOWN",
+) -> Tuple[int, int]:
+    del name
     open_minutes = _to_minutes(open_time)
     close_minutes = _to_minutes(close_time)
     if close_minutes <= open_minutes:
@@ -128,7 +96,7 @@ def compute_template_time(template: Dict[str, Union[int, str]], open_time: TimeV
     else:
         raise ValueError(f"Unknown template anchor: {anchor}")
 
-    # Adapt templates to store window while preserving duration when possible.
+    # Adapt template to store window while trying to preserve the duration.
     if duration_minutes is not None:
         if end_time > close_minutes:
             overflow = end_time - close_minutes
@@ -144,6 +112,7 @@ def compute_template_time(template: Dict[str, Union[int, str]], open_time: TimeV
 
     if end_time <= start_time:
         raise ValueError("Template end_time must be after start_time.")
+
     worked_minutes = (end_time - start_time) - pause_minutes
     if worked_minutes < MIN_SHIFT_MINUTES:
         raise ValueError("Template duration must be at least 6 hours.")
@@ -169,7 +138,6 @@ def template_to_slots(start_time: int, end_time: int, slot_minutes: int = 15, pa
     if pause_slots <= 0 or pause_slots >= len(all_slots):
         return all_slots
 
-    # Center the break inside the shift window.
     break_start_idx = (len(all_slots) - pause_slots) // 2
     break_end_idx = break_start_idx + pause_slots
     return all_slots[:break_start_idx] + all_slots[break_end_idx:]
@@ -181,7 +149,10 @@ def build_template_slots(open_time: TimeValue, close_time: TimeValue, slot_minut
 
     template_slots: Dict[str, List[int]] = {}
     for name, template in SHIFT_TEMPLATES.items():
-        start_time, end_time = compute_template_time(template, open_minutes, close_minutes)
+        try:
+            start_time, end_time = compute_template_time(template, open_minutes, close_minutes, name=name)
+        except ValueError:
+            continue
         pause_minutes = int(template.get("pause_minutes", 0))
         relative_start = start_time - open_minutes
         relative_end = end_time - open_minutes
@@ -191,9 +162,10 @@ def build_template_slots(open_time: TimeValue, close_time: TimeValue, slot_minut
             slot_minutes=slot_minutes,
             pause_minutes=pause_minutes,
         )
-    print("SHIFT_BREAKS_ENABLED")
     return template_slots
 
 
-def iter_templates_by_tier(templates: Dict[str, Dict[str, Union[int, str]]] = SHIFT_TEMPLATES) -> Iterable[Tuple[str, Dict[str, Union[int, str]]]]:
+def iter_templates_by_tier(
+    templates: Dict[str, Dict[str, Union[int, str]]] = SHIFT_TEMPLATES,
+) -> Iterable[Tuple[str, Dict[str, Union[int, str]]]]:
     return iter(sorted(templates.items(), key=lambda item: (int(item[1].get("tier", 99)), item[0])))

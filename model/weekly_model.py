@@ -6,20 +6,20 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ortools.sat.python import cp_model
-from model.shift_templates import CLOSING_TEMPLATES, SHIFT_TEMPLATES, build_template_slots
-from utils.time_slots import time_to_slot
+
+from utils.time_slots import generate_opening_slots
 
 try:
-    from config.store_config import BASE_MIN_STAFF, EVENING_BOOST, EVENING_PEAK_HOUR, SATURDAY_BOOST
+    from config.store_config import BASE_MIN_STAFF
 except Exception:
-    # Fallback loader when a non-package module named "config" shadows local config/.
     store_cfg: Dict[str, object] = {}
     store_cfg_path = Path(__file__).resolve().parents[1] / "config" / "store_config.py"
     exec(store_cfg_path.read_text(encoding="utf-8"), store_cfg)
     BASE_MIN_STAFF = int(store_cfg["BASE_MIN_STAFF"])
-    EVENING_PEAK_HOUR = str(store_cfg["EVENING_PEAK_HOUR"])
-    EVENING_BOOST = int(store_cfg["EVENING_BOOST"])
-    SATURDAY_BOOST = int(store_cfg["SATURDAY_BOOST"])
+
+MIN_SHIFT_SLOTS = 8
+SHORT_SHIFT_WEIGHT = 50
+LONG_SHIFT_WEIGHT = 50
 
 
 @dataclass
@@ -126,7 +126,7 @@ def _add_weekly_rest_35h_constraints(
 
 
 def _resolve_min_staff_per_day(schedule: dict, num_days: int, closed_days: List[int]) -> List[int]:
-    default_min_staff = int(schedule.get("min_staff_per_slot", 1))
+    default_min_staff = int(schedule.get("min_staff_per_slot", BASE_MIN_STAFF))
     min_staff_per_day = schedule.get("min_staff_per_day")
 
     if isinstance(min_staff_per_day, (list, tuple)) and len(min_staff_per_day) == num_days:
@@ -147,7 +147,7 @@ def _contracts_to_slots(contracts: List[float], slot_minutes: int) -> List[int]:
         slot_count = int(round(raw_minutes / slot_minutes))
         if abs(slot_count * slot_minutes - raw_minutes) > 1e-6:
             raise ValueError(
-                f"Durée contractuelle {hours}h incompatible avec des slots de {slot_minutes} minutes."
+                f"Duree contractuelle {hours}h incompatible avec des slots de {slot_minutes} minutes."
             )
         slots.append(slot_count)
     return slots
@@ -165,73 +165,53 @@ def build_weekly_model(
     if len(days) != 7:
         raise ValueError("V1 strict: le planning doit contenir exactement 7 jours.")
     if len(employees) != len(contracts):
-        raise ValueError("Incohérence: nombre d'employés différent du nombre de contrats.")
+        raise ValueError("Incoherence: nombre d'employes different du nombre de contrats.")
     if len(roles) != len(employees):
-        raise ValueError("Incohérence: nombre de rôles différent du nombre d'employés.")
+        raise ValueError("Incoherence: nombre de roles different du nombre d'employes.")
 
     for emp_name, contract in zip(employees, contracts):
         if contract < 0:
-            raise ValueError(f"Contrat négatif interdit pour {emp_name}: {contract}h")
+            raise ValueError(f"Contrat negatif interdit pour {emp_name}: {contract}h")
         if contract > 35:
-            raise ValueError(f"Contrat > 35h non autorisé en V1 pour {emp_name}: {contract}h")
+            raise ValueError(f"Contrat > 35h non autorise en V1 pour {emp_name}: {contract}h")
 
     schedule = config.get("schedule", config)
     hard = config.get("hard_constraints", {})
-    print("SHIFT_TEMPLATES_LOADED", len(SHIFT_TEMPLATES))
+    soft_weights = config.get("soft_weights", {})
 
     slot_minutes = int(schedule.get("slot_minutes", 15))
     start_time_minutes = int(schedule.get("start_time_minutes", 9 * 60 + 30))
     end_time_minutes = int(schedule.get("end_time_minutes", 20 * 60 + 15))
 
     if end_time_minutes <= start_time_minutes:
-        raise ValueError("Configuration invalide: end_time_minutes doit être > start_time_minutes.")
+        raise ValueError("Configuration invalide: end_time_minutes doit etre > start_time_minutes.")
 
     opening_minutes = end_time_minutes - start_time_minutes
     if opening_minutes % slot_minutes != 0:
-        raise ValueError("Fenêtre horaire incompatible avec slot_minutes.")
+        raise ValueError("Fenetre horaire incompatible avec slot_minutes.")
 
     num_employees = len(employees)
     num_days = len(days)
-    num_slots = opening_minutes // slot_minutes
-    evening_peak_slot = time_to_slot(
-        EVENING_PEAK_HOUR,
-        start_time_minutes=start_time_minutes,
-        slot_minutes=slot_minutes,
+    num_slots = len(
+        generate_opening_slots(
+            open_time=start_time_minutes,
+            close_time=end_time_minutes,
+            slot_minutes=slot_minutes,
+        )
     )
 
-    try:
-        template_slots = build_template_slots(
-            start_time_minutes, end_time_minutes, slot_minutes=slot_minutes
-        )
-    except ValueError:
-        # Keep model solvable for narrow store windows while template library is >= 6h.
-        template_slots = {}
-    if not template_slots:
-        template_slots = {"FULL_OPEN_FALLBACK": list(range(num_slots))}
-    templates = list(template_slots.keys())
-    print("TEMPLATES_USED", templates)
-    print("TEMPLATE_DRIVEN_SLOTS_ENABLED")
-    template_duration_slots = {t: len(template_slots[t]) for t in templates}
-    full_templates = [t for t in ["FULL_OPEN", "FULL_LATE", "FULL_EARLY"] if t in templates]
-    closing_templates = [t for t in CLOSING_TEMPLATES if t in templates]
-    short_templates = [t for t in ["SHORT_AM", "SHORT_PM", "SHORT_MID"] if t in templates]
-
-    max_daily_minutes = int(hard.get("max_daily_minutes", 600))
-    if max_daily_minutes > 600:
-        max_daily_minutes = 600
-    max_daily_slots = max_daily_minutes // slot_minutes
-
-    max_days_per_week = min(6, int(hard.get("max_days_per_week", 6)))
     rest_between_days_minutes = int(hard.get("rest_between_days_minutes", 660))
     weekly_rest_minutes = int(hard.get("weekly_rest_minutes", 2100))
     require_optician = bool(hard.get("require_qualified_optician", True))
+    min_day_slots = (360 + slot_minutes - 1) // slot_minutes
+    max_day_slots = (600 + slot_minutes - 1) // slot_minutes
 
     closed_days = _resolve_closed_day_indices(config, num_days)
     min_staff_per_day = _resolve_min_staff_per_day(schedule, num_days, closed_days)
 
     optician_indices = [idx for idx, role in enumerate(roles) if role == "opticien"]
     if require_optician and not optician_indices:
-        raise ValueError("Aucun opticien diplômé disponible (contrainte hard active).")
+        raise ValueError("Aucun opticien diplome disponible (contrainte hard active).")
 
     contracts_slots = _contracts_to_slots(contracts, slot_minutes)
 
@@ -246,111 +226,80 @@ def build_weekly_model(
                 if d in closed_days:
                     model.Add(var == 0)
 
-    shift = {}
+    # HARD: span maximal journalier (10h) via premier et dernier slot travailles.
+    max_day_slots = (600 + slot_minutes - 1) // slot_minutes
     for e in range(num_employees):
         for d in range(num_days):
-            for t in templates:
-                shift[(e, d, t)] = model.NewBoolVar(f"shift_{e}_{d}_{t}")
-    print("SHIFT_VARIABLES_CREATED")
+            first_slot_e_d = model.NewIntVar(0, num_slots - 1, f"first_slot_{e}_{d}")
+            last_slot_e_d = model.NewIntVar(0, num_slots - 1, f"last_slot_{e}_{d}")
 
-    for e in range(num_employees):
-        for d in range(num_days):
-            model.Add(sum(shift[(e, d, t)] for t in templates) <= 1)
-
-    # Soft constraints: weekly distribution of shift types.
-    soft_penalties = []
-    for e in range(num_employees):
-        full_days = sum(
-            shift[(e, d, t)]
-            for d in range(num_days)
-            for t in full_templates
-        ) if full_templates else 0
-        closing_days = sum(
-            shift[(e, d, t)]
-            for d in range(num_days)
-            for t in closing_templates
-        ) if closing_templates else 0
-        short_days = sum(
-            shift[(e, d, t)]
-            for d in range(num_days)
-            for t in short_templates
-        ) if short_templates else 0
-
-        full_violation = model.NewIntVar(0, 7, f"full_violation_{e}")
-        closing_violation = model.NewIntVar(0, 7, f"closing_violation_{e}")
-        short_violation = model.NewIntVar(0, 7, f"short_violation_{e}")
-
-        model.Add(full_days <= 3 + full_violation)
-        model.Add(closing_days <= 3 + closing_violation)
-        model.Add(short_days >= 1 - short_violation)
-
-        soft_penalties.append(full_violation * 5)
-        soft_penalties.append(closing_violation * 3)
-        soft_penalties.append(short_violation * 2)
-    print("SHIFT_DISTRIBUTION_CONSTRAINTS_ENABLED")
-
-    closing_shift = {}
-    for e in range(num_employees):
-        for d in range(num_days):
-            closing_shift[(e, d)] = (
-                sum(shift[(e, d, t)] for t in closing_templates) if closing_templates else 0
-            )
-        for d in range(num_days - 1):
-            violation = model.NewIntVar(0, 1, f"closing_violation_{e}_{d}")
-            model.Add(
-                closing_shift[(e, d)] + closing_shift[(e, d + 1)]
-                <= 1 + violation
-            )
-            soft_penalties.append(violation * 4)
-    print("CLOSING_ROTATION_ENABLED")
-
-    saturday_index = 5
-    if saturday_index < num_days:
-        for e in range(num_employees):
-            saturday_work = sum(
-                shift[(e, saturday_index, t)]
-                for t in templates
-            )
-            saturday_violation = model.NewIntVar(0, 2, f"saturday_violation_{e}")
-            model.Add(saturday_work <= 1 + saturday_violation)
-            soft_penalties.append(saturday_violation * 4)
-    print("SATURDAY_BALANCING_ENABLED")
-
-    for e in range(num_employees):
-        for d in range(num_days):
-            for t in templates:
-                for s in template_slots[t]:
-                    model.Add(x[(e, d, s)] >= shift[(e, d, t)])
-
-    covering_templates_by_slot = {}
-    for s in range(num_slots):
-        covering_templates_by_slot[s] = [t for t in templates if s in template_slots[t]]
-
-    for e in range(num_employees):
-        for d in range(num_days):
+            first_candidates = []
+            last_candidates = []
             for s in range(num_slots):
-                covering_templates = covering_templates_by_slot[s]
-                if covering_templates:
-                    model.Add(
-                        x[(e, d, s)] <= sum(shift[(e, d, t)] for t in covering_templates)
-                    )
-                else:
-                    model.Add(x[(e, d, s)] == 0)
+                first_candidate = model.NewIntVar(0, num_slots - 1, f"first_candidate_{e}_{d}_{s}")
+                model.Add(first_candidate == s).OnlyEnforceIf(x[(e, d, s)])
+                model.Add(first_candidate == num_slots - 1).OnlyEnforceIf(x[(e, d, s)].Not())
+                first_candidates.append(first_candidate)
 
-    # Enforce a single contiguous work block per employee per day.
+                last_candidate = model.NewIntVar(0, num_slots - 1, f"last_candidate_{e}_{d}_{s}")
+                model.Add(last_candidate == s).OnlyEnforceIf(x[(e, d, s)])
+                model.Add(last_candidate == 0).OnlyEnforceIf(x[(e, d, s)].Not())
+                last_candidates.append(last_candidate)
+
+            model.AddMinEquality(first_slot_e_d, first_candidates)
+            model.AddMaxEquality(last_slot_e_d, last_candidates)
+
+            day_worked = model.NewBoolVar(f"day_worked_span_{e}_{d}")
+            day_slots = sum(x[(e, d, s)] for s in range(num_slots))
+            model.Add(day_slots >= 1).OnlyEnforceIf(day_worked)
+            model.Add(day_slots == 0).OnlyEnforceIf(day_worked.Not())
+            model.Add(last_slot_e_d - first_slot_e_d <= max_day_slots).OnlyEnforceIf(day_worked)
+
+    # HARD: 1 bloc continu par employe et par jour.
+    start_vars: Dict[Tuple[int, int, int], cp_model.IntVar] = {}
     for e in range(num_employees):
         for d in range(num_days):
             starts = []
             for s in range(num_slots):
                 start = model.NewBoolVar(f"start_{e}_{d}_{s}")
+                start_vars[(e, d, s)] = start
                 if s == 0:
-                    model.Add(start >= x[(e, d, s)])
+                    model.Add(start == x[(e, d, s)])
                 else:
                     model.Add(start >= x[(e, d, s)] - x[(e, d, s - 1)])
+                    model.Add(start <= x[(e, d, s)])
+                    model.Add(start <= 1 - x[(e, d, s - 1)])
                 starts.append(start)
             model.Add(sum(starts) <= 1)
-    print("CONTIGUOUS_SHIFT_CONSTRAINT_ENABLED")
 
+    # HARD: longueur minimale de 6h apres detection du debut.
+    for e in range(num_employees):
+        for d in range(num_days):
+            for s in range(num_slots):
+                start_var = start_vars[(e, d, s)]
+                print(
+                    "[DEBUG MAX DAY]",
+                    "employee=", e,
+                    "day=", d,
+                    "start_slot=", s,
+                    "max_day_slots=", max_day_slots,
+                )
+                remaining = num_slots - s
+                if remaining < min_day_slots:
+                    model.Add(start_var == 0)
+                    continue
+
+                valid_slots = []
+                for k in range(min_day_slots):
+                    if s + k < num_slots:
+                        valid_slots.append(x[(e, d, s + k)])
+
+                if valid_slots:
+                    model.Add(sum(valid_slots) >= min_day_slots * start_var)
+                for k in range(max_day_slots + 1, num_slots - s):
+                    model.Add(x[(e, d, s + k)] == 0).OnlyEnforceIf(start_var)
+
+    # Unavailabilities.
     for entry in unavailabilities or []:
         if len(entry) == 2:
             emp_idx, day_idx = entry
@@ -360,55 +309,86 @@ def build_weekly_model(
             emp_idx, day_idx, slot_idx = entry
             model.Add(x[(emp_idx, day_idx, slot_idx)] == 0)
 
-    for d in range(num_days):
-        for s in range(num_slots):
-            required_staff = BASE_MIN_STAFF
-            if s >= evening_peak_slot:
-                required_staff += EVENING_BOOST
-            if d == saturday_index:
-                required_staff += SATURDAY_BOOST
-            if d in closed_days:
-                required_staff = 0
+    # HARD: contrat hebdomadaire (borne haute legale/metier).
+    worked_slots_per_employee: Dict[int, cp_model.IntVar] = {}
+    for e in range(num_employees):
+        worked_slots = model.NewIntVar(0, num_days * num_slots, f"worked_slots_{e}")
+        model.Add(worked_slots == sum(x[(e, d, s)] for d in range(num_days) for s in range(num_slots)))
+        model.Add(worked_slots <= contracts_slots[e])
+        worked_slots_per_employee[e] = worked_slots
 
+    # HARD: minimum staff journalier global (garde-fou metier).
+    for d in range(num_days):
+        if d in closed_days:
+            continue
+        model.Add(sum(x[(e, d, s)] for e in range(num_employees) for s in range(num_slots)) >= min_staff_per_day[d])
+
+    soft_penalties = []
+    target_shift_slots = (360 + slot_minutes - 1) // slot_minutes
+    short_shift_vars: Dict[Tuple[int, int], cp_model.IntVar] = {}
+    long_shift_vars: Dict[Tuple[int, int], cp_model.IntVar] = {}
+
+    for e in range(num_employees):
+        for d in range(num_days):
+            shift_length = sum(x[(e, d, s)] for s in range(num_slots))
+            short_shift = model.NewIntVar(0, target_shift_slots, f"short_shift_{e}_{d}")
+            model.Add(short_shift >= target_shift_slots - shift_length)
+            short_shift_vars[(e, d)] = short_shift
+            long_shift = model.NewIntVar(0, num_slots, f"long_shift_{e}_{d}")
+            model.Add(long_shift >= shift_length - max_day_slots)
+            long_shift_vars[(e, d)] = long_shift
+    soft_penalties.append(
+        SHORT_SHIFT_WEIGHT * sum(short_shift_vars[(e, d)] for e in range(num_employees) for d in range(num_days))
+    )
+    soft_penalties.append(
+        LONG_SHIFT_WEIGHT * sum(long_shift_vars[(e, d)] for e in range(num_employees) for d in range(num_days))
+    )
+
+    # SOFT: couverture par slot.
+    coverage_weight = int(soft_weights.get("coverage_weight", 10))
+    for d in range(num_days):
+        required_staff = min_staff_per_day[d]
+        for s in range(num_slots):
             coverage = sum(x[(e, d, s)] for e in range(num_employees))
-            understaff = model.NewIntVar(
-                0,
-                required_staff,
-                f"understaff_{d}_{s}",
-            )
+            understaff = model.NewIntVar(0, required_staff, f"understaff_{d}_{s}")
             model.Add(coverage + understaff >= required_staff)
-            soft_penalties.append(understaff * 10)
+            soft_penalties.append(understaff * coverage_weight)
+            # HARD: opticien present pendant ouverture quand staff requis.
             if require_optician and required_staff > 0:
                 model.Add(sum(x[(e, d, s)] for e in optician_indices) >= 1)
-    print("OPTICAL_TRAFFIC_CURVE_ENABLED")
-    print("SOFT_COVERAGE_ENABLED")
 
-    worked_day = {}
-    target_hours_slots = int(round(sum(contracts_slots) / max(1, num_employees)))
+    # SOFT: respect contrat (inciter a atteindre le contrat sans depassement hard).
+    contract_weight = int(soft_weights.get("contract_target", 25))
     for e in range(num_employees):
-        total_week_slots = []
+        contract_minutes = contracts_slots[e] * slot_minutes
+        worked_minutes = worked_slots_per_employee[e] * slot_minutes
+        under_contract = model.NewIntVar(0, contract_minutes, f"under_contract_{e}")
+        model.Add(under_contract >= contract_minutes - worked_minutes)
+        soft_penalties.append(under_contract * contract_weight)
+
+    # SOFT: equilibrage leger du nombre de jours travailles.
+    balance_weight = int(soft_weights.get("light_balance_weight", 1))
+    worked_days = []
+    for e in range(num_employees):
+        worked_day_vars = []
         for d in range(num_days):
-            hours_worked = sum(
-                shift[(e, d, t)] * template_duration_slots[t]
-                for t in templates
-            )
-            model.Add(hours_worked <= max_daily_slots)
-            total_week_slots.append(hours_worked)
+            worked_day = model.NewBoolVar(f"worked_day_{e}_{d}")
+            shift_length = sum(x[(e, d, s)] for s in range(num_slots))
+            model.Add(shift_length >= min_day_slots * worked_day)
+            model.Add(shift_length <= num_slots * worked_day)
+            worked_day_vars.append(worked_day)
+        days_count = model.NewIntVar(0, num_days, f"worked_days_count_{e}")
+        model.Add(days_count == sum(worked_day_vars))
+        worked_days.append(days_count)
 
-            day_flag = model.NewBoolVar(f"worked_day_{e}_{d}")
-            worked_day[(e, d)] = day_flag
-            model.Add(hours_worked >= 1).OnlyEnforceIf(day_flag)
-            model.Add(hours_worked == 0).OnlyEnforceIf(day_flag.Not())
-
-        hours_employee = sum(total_week_slots)
-        model.Add(hours_employee == contracts_slots[e])
-        model.Add(sum(worked_day[(e, d)] for d in range(num_days)) <= max_days_per_week)
-
-        diff_hours = model.NewIntVar(0, 40 * 60 // slot_minutes, f"diff_hours_{e}")
-        model.Add(hours_employee - target_hours_slots <= diff_hours)
-        model.Add(target_hours_slots - hours_employee <= diff_hours)
-        soft_penalties.append(diff_hours * 2)
-    print("TEAM_BALANCING_ENABLED")
+    max_days = model.NewIntVar(0, num_days, "max_worked_days")
+    min_days = model.NewIntVar(0, num_days, "min_worked_days")
+    for e in range(num_employees):
+        model.Add(worked_days[e] <= max_days)
+        model.Add(worked_days[e] >= min_days)
+    spread_days = model.NewIntVar(0, num_days, "spread_worked_days")
+    model.Add(spread_days == max_days - min_days)
+    soft_penalties.append(spread_days * balance_weight)
 
     _add_rest_11h_constraints(
         model=model,
@@ -431,7 +411,7 @@ def build_weekly_model(
         rest_minutes=weekly_rest_minutes,
     )
 
-    model.Minimize(sum(soft_penalties))
+    model.Minimize(sum(soft_penalties) if soft_penalties else 0)
 
     return WeeklyModelArtifacts(
         model=model,

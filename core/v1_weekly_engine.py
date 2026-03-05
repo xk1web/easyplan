@@ -15,25 +15,26 @@ def _minutes_to_hhmm(minutes: int) -> str:
 def _build_ranges(slots: List[int], start_time_minutes: int, slot_minutes: int) -> List[Dict[str, str]]:
     if not slots:
         return []
-    sorted_slots = sorted(slots)
-    ranges = []
-    block_start = sorted_slots[0]
-    previous = sorted_slots[0]
+    active_slots = sorted(slots)
+    merged_segments: List[Tuple[int, int]] = []
+    start = active_slots[0]
+    prev = active_slots[0]
 
-    for slot_idx in sorted_slots[1:]:
-        if slot_idx == previous + 1:
-            previous = slot_idx
-            continue
+    for slot_idx in active_slots[1:]:
+        if slot_idx == prev + 1:
+            prev = slot_idx
+        else:
+            merged_segments.append((start, prev))
+            start = slot_idx
+            prev = slot_idx
 
-        start = start_time_minutes + block_start * slot_minutes
-        end = start_time_minutes + (previous + 1) * slot_minutes
-        ranges.append({"start": _minutes_to_hhmm(start), "end": _minutes_to_hhmm(end)})
-        block_start = slot_idx
-        previous = slot_idx
+    merged_segments.append((start, prev))
 
-    start = start_time_minutes + block_start * slot_minutes
-    end = start_time_minutes + (previous + 1) * slot_minutes
-    ranges.append({"start": _minutes_to_hhmm(start), "end": _minutes_to_hhmm(end)})
+    ranges: List[Dict[str, str]] = []
+    for segment_start, segment_end in merged_segments:
+        start_time = start_time_minutes + segment_start * slot_minutes
+        end_time = start_time_minutes + (segment_end + 1) * slot_minutes
+        ranges.append({"start": _minutes_to_hhmm(start_time), "end": _minutes_to_hhmm(end_time)})
 
     return ranges
 
@@ -42,6 +43,11 @@ def _build_schedule(
     artifacts: WeeklyModelArtifacts,
     solve_output: WeeklySolveOutput,
 ) -> Tuple[Dict[str, Dict], Dict[str, Dict[str, List[int]]]]:
+    print("EXTRACTION DEBUG")
+    print("employees:", artifacts.employees)
+    print("days:", artifacts.num_days)
+    print("slots:", artifacts.num_slots)
+
     schedule: Dict[str, Dict] = {}
     coverage_slots_per_day: Dict[str, Dict[str, List[int]]] = {}
 
@@ -50,22 +56,34 @@ def _build_schedule(
         coverage_slots_per_day[emp_name] = {}
 
         for d, day_name in enumerate(artifacts.days):
-            slots = [
+            active_slots = [
                 s
                 for s in range(artifacts.num_slots)
                 if solve_output.x_values.get((e, d, s), 0) == 1
             ]
-            if not slots:
+            if not active_slots:
                 continue
 
-            ranges = _build_ranges(slots, artifacts.start_time_minutes, artifacts.slot_minutes)
-            hours = len(slots) * artifacts.slot_minutes / 60.0
+            print(
+                "[DEBUG BUILD_RANGES INPUT]",
+                "employee=", e,
+                "day=", d,
+                "slots=", active_slots,
+            )
+            ranges = _build_ranges(active_slots, artifacts.start_time_minutes, artifacts.slot_minutes)
+            print(
+                "[DEBUG BUILD_RANGES OUTPUT]",
+                "employee=", e,
+                "day=", d,
+                "ranges=", ranges,
+            )
+            hours = len(active_slots) * artifacts.slot_minutes / 60.0
             schedule[emp_name]["days"][day_name] = {
                 "ranges": ranges,
                 "hours": hours,
             }
             schedule[emp_name]["total_hours"] += hours
-            coverage_slots_per_day[emp_name][day_name] = slots
+            coverage_slots_per_day[emp_name][day_name] = active_slots
 
     return schedule, coverage_slots_per_day
 
@@ -79,6 +97,17 @@ def run_weekly_v1_engine(
     config: dict,
     unavailabilities: Optional[List[Tuple[int, ...]]] = None,
 ) -> Dict:
+    opening_hours = config.get("opening_hours")
+    if opening_hours is None:
+        schedule_cfg = config.get("schedule", {})
+        opening_hours = {
+            "open": schedule_cfg.get("open_time"),
+            "close": schedule_cfg.get("close_time"),
+        }
+    print("ENGINE INPUT DEBUG")
+    print("opening_hours received:", opening_hours)
+    print("employees received:", employees)
+
     artifacts = build_weekly_model(
         employees=employees,
         contracts=contracts,
@@ -108,6 +137,8 @@ def run_weekly_v1_engine(
         "solver_status": solve_output.solver_status,
         "num_branches": solve_output.num_branches,
         "num_conflicts": solve_output.num_conflicts,
+        "min_shift_length": solve_output.min_shift_length,
+        "avg_shift_length": solve_output.avg_shift_length,
     }
 
     result = {
@@ -128,6 +159,10 @@ def run_weekly_v1_engine(
         result["traceability"] = {
             "x": solve_output.x_values,
         }
+        print("[DEBUG FINAL SCHEDULE PAYLOAD]")
+        for employee, data in schedule.items():
+            for day, day_data in data["days"].items():
+                print(employee, day, day_data["ranges"])
     else:
         result["schedule"] = None
         result["coverage_slots_per_day"] = {}

@@ -4,8 +4,10 @@ type ErrorPayload = {
   detail?: string;
 };
 
+const API_BASE_URL = "http://localhost:8001";
+
 const getBaseUrl = () => {
-  const base = import.meta.env.VITE_API_BASE_URL ?? "";
+  const base = API_BASE_URL;
   return base.endsWith("/") ? base.slice(0, -1) : base;
 };
 
