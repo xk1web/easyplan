@@ -2,6 +2,8 @@ from typing import List, Union
 
 
 TimeValue = Union[int, str]
+HIDDEN_BREAK_THRESHOLD_MINUTES = 6 * 60
+HIDDEN_BREAK_MINUTES = 60
 
 
 def _to_minutes(value: TimeValue) -> int:
@@ -39,3 +41,14 @@ def time_to_slot(hhmm: str, start_time_minutes: int = 0, slot_minutes: int = 15)
     if relative <= 0:
         return 0
     return relative // slot_minutes
+
+
+def effective_worked_minutes(
+    presence_minutes: int,
+    *,
+    break_threshold_minutes: int = HIDDEN_BREAK_THRESHOLD_MINUTES,
+    break_minutes: int = HIDDEN_BREAK_MINUTES,
+) -> int:
+    if presence_minutes > break_threshold_minutes:
+        return max(0, presence_minutes - break_minutes)
+    return max(0, presence_minutes)

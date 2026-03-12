@@ -88,6 +88,40 @@ class TestV1WeeklyRegression(unittest.TestCase):
         self.assertEqual(result["status"], "infeasible")
         self.assertGreater(result["kpi"]["sous_couverture_nette"], 0.0)
 
+    def test_hidden_break_deducted_from_worked_hours_only(self):
+        config = _base_config(start=9 * 60, end=17 * 60, min_staff=0)
+
+        result = run_weekly_v1_engine(
+            employees=["Opt1"],
+            contracts=[35],
+            roles=["opticien"],
+            days=_days7(),
+            config=config,
+            unavailabilities=[],
+        )
+
+        self.assertIn(result["status"], ("optimal", "feasible"))
+        schedule = result["schedule"]["Opt1"]["days"]
+        self.assertTrue(schedule)
+
+        # At least one displayed 8h continuous range with only 7h counted as worked.
+        found_long_shift = False
+        for day_data in schedule.values():
+            ranges = day_data.get("ranges", [])
+            if not ranges:
+                continue
+            day_hours_displayed = 0.0
+            for r in ranges:
+                start_h, start_m = map(int, r["start"].split(":"))
+                end_h, end_m = map(int, r["end"].split(":"))
+                day_hours_displayed += ((end_h * 60 + end_m) - (start_h * 60 + start_m)) / 60.0
+            if day_hours_displayed >= 8.0:
+                self.assertAlmostEqual(day_data["hours"], day_hours_displayed - 1.0, places=6)
+                found_long_shift = True
+                break
+
+        self.assertTrue(found_long_shift)
+
 
 if __name__ == "__main__":
     unittest.main()

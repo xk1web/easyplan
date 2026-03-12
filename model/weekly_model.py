@@ -7,7 +7,11 @@ from typing import Dict, List, Optional, Tuple
 
 from ortools.sat.python import cp_model
 
-from utils.time_slots import generate_opening_slots
+from utils.time_slots import (
+    HIDDEN_BREAK_MINUTES,
+    HIDDEN_BREAK_THRESHOLD_MINUTES,
+    generate_opening_slots,
+)
 
 try:
     from config.store_config import BASE_MIN_STAFF
@@ -203,7 +207,9 @@ def build_weekly_model(
     rest_between_days_minutes = int(hard.get("rest_between_days_minutes", 660))
     weekly_rest_minutes = int(hard.get("weekly_rest_minutes", 2100))
     require_optician = bool(hard.get("require_qualified_optician", True))
-    min_day_slots = (360 + slot_minutes - 1) // slot_minutes
+    configured_min_shift_minutes = int(hard.get("min_shift_minutes", 360))
+    effective_min_shift_minutes = min(configured_min_shift_minutes, opening_minutes)
+    min_day_slots = (effective_min_shift_minutes + slot_minutes - 1) // slot_minutes
     max_day_slots = (600 + slot_minutes - 1) // slot_minutes
 
     closed_days = _resolve_closed_day_indices(config, num_days)
@@ -272,7 +278,7 @@ def build_weekly_model(
                 starts.append(start)
             model.Add(sum(starts) <= 1)
 
-    # HARD: longueur minimale de 6h apres detection du debut.
+    # HARD: longueur minimale de shift (plafonnee par la duree d'ouverture du jour).
     for e in range(num_employees):
         for d in range(num_days):
             for s in range(num_slots):
@@ -309,13 +315,27 @@ def build_weekly_model(
             emp_idx, day_idx, slot_idx = entry
             model.Add(x[(emp_idx, day_idx, slot_idx)] == 0)
 
-    # HARD: contrat hebdomadaire (borne haute legale/metier).
-    worked_slots_per_employee: Dict[int, cp_model.IntVar] = {}
+    # HARD: contrat hebdomadaire sur temps effectif (pause invisible deduite si shift > 6h).
+    min_slots_for_break = (HIDDEN_BREAK_THRESHOLD_MINUTES // slot_minutes) + 1
+    worked_minutes_per_employee: Dict[int, cp_model.IntVar] = {}
     for e in range(num_employees):
-        worked_slots = model.NewIntVar(0, num_days * num_slots, f"worked_slots_{e}")
-        model.Add(worked_slots == sum(x[(e, d, s)] for d in range(num_days) for s in range(num_slots)))
-        model.Add(worked_slots <= contracts_slots[e])
-        worked_slots_per_employee[e] = worked_slots
+        effective_minutes_by_day = []
+        for d in range(num_days):
+            day_slots = model.NewIntVar(0, num_slots, f"day_slots_{e}_{d}")
+            model.Add(day_slots == sum(x[(e, d, s)] for s in range(num_slots)))
+
+            has_hidden_break = model.NewBoolVar(f"has_hidden_break_{e}_{d}")
+            model.Add(day_slots >= min_slots_for_break).OnlyEnforceIf(has_hidden_break)
+            model.Add(day_slots <= min_slots_for_break - 1).OnlyEnforceIf(has_hidden_break.Not())
+
+            day_effective_minutes = model.NewIntVar(0, num_slots * slot_minutes, f"day_effective_minutes_{e}_{d}")
+            model.Add(day_effective_minutes == day_slots * slot_minutes - has_hidden_break * HIDDEN_BREAK_MINUTES)
+            effective_minutes_by_day.append(day_effective_minutes)
+
+        worked_minutes = model.NewIntVar(0, num_days * num_slots * slot_minutes, f"worked_minutes_{e}")
+        model.Add(worked_minutes == sum(effective_minutes_by_day))
+        model.Add(worked_minutes <= contracts_slots[e] * slot_minutes)
+        worked_minutes_per_employee[e] = worked_minutes
 
     # HARD: minimum staff journalier global (garde-fou metier).
     for d in range(num_days):
@@ -324,7 +344,7 @@ def build_weekly_model(
         model.Add(sum(x[(e, d, s)] for e in range(num_employees) for s in range(num_slots)) >= min_staff_per_day[d])
 
     soft_penalties = []
-    target_shift_slots = (360 + slot_minutes - 1) // slot_minutes
+    target_shift_slots = min_day_slots
     short_shift_vars: Dict[Tuple[int, int], cp_model.IntVar] = {}
     long_shift_vars: Dict[Tuple[int, int], cp_model.IntVar] = {}
 
@@ -361,7 +381,7 @@ def build_weekly_model(
     contract_weight = int(soft_weights.get("contract_target", 25))
     for e in range(num_employees):
         contract_minutes = contracts_slots[e] * slot_minutes
-        worked_minutes = worked_slots_per_employee[e] * slot_minutes
+        worked_minutes = worked_minutes_per_employee[e]
         under_contract = model.NewIntVar(0, contract_minutes, f"under_contract_{e}")
         model.Add(under_contract >= contract_minutes - worked_minutes)
         soft_penalties.append(under_contract * contract_weight)

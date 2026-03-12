@@ -5,8 +5,9 @@ from typing import Dict, Tuple, Any
 
 from ortools.sat.python import cp_model
 
-from model.weekly_model import BASE_MIN_STAFF, WeeklyModelArtifacts
+from model.weekly_model import WeeklyModelArtifacts
 from model.shift_templates import CLOSING_TEMPLATES, SHIFT_TEMPLATES
+from utils.time_slots import effective_worked_minutes
 
 
 @dataclass
@@ -84,7 +85,7 @@ def solve_weekly_model(
     print("employees:", len(artifacts.employees))
     print("days:", artifacts.num_days)
     print("slots per day:", artifacts.num_slots)
-    print("BASE_MIN_STAFF:", BASE_MIN_STAFF)
+    print("MIN_STAFF_PER_DAY:", artifacts.min_staff_per_day)
     print("CLOSING_TEMPLATES:", CLOSING_TEMPLATES)
     missing_closing_templates = [t for t in CLOSING_TEMPLATES if t not in SHIFT_TEMPLATES]
     if missing_closing_templates:
@@ -92,8 +93,8 @@ def solve_weekly_model(
 
     total_required = 0
     for d in range(artifacts.num_days):
+        required_staff = int(artifacts.min_staff_per_day[d])
         for s in range(artifacts.num_slots):
-            required_staff = BASE_MIN_STAFF
             total_required += required_staff
     print("TOTAL STAFF REQUIRED:", total_required)
 
@@ -181,7 +182,14 @@ def solve_weekly_model(
                         )
                 if day_slots > 0:
                     shift_lengths_slots.append(day_slots)
-            hours_per_employee[emp_name] = total_slots * artifacts.slot_minutes / 60.0
+            total_effective_minutes = 0
+            for d in range(artifacts.num_days):
+                day_slots = sum(
+                    int(solver.Value(artifacts.x[(e, d, s)]))
+                    for s in range(artifacts.num_slots)
+                )
+                total_effective_minutes += effective_worked_minutes(day_slots * artifacts.slot_minutes)
+            hours_per_employee[emp_name] = total_effective_minutes / 60.0
 
         if shift_lengths_slots:
             min_shift_length = min(shift_lengths_slots) * artifacts.slot_minutes / 60.0

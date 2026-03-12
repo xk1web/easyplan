@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from explanation.v1_explanation import build_v1_explanation
+from core.explanation.planning_explainer import explain_planning
+from core.metrics.kpi_calculator import calculate_kpi
 from metrics.v1_kpi import compute_v1_kpi
 from model.weekly_model import WeeklyModelArtifacts, build_weekly_model
 from solve.weekly_solver import WeeklySolveOutput, solve_weekly_model
+from utils.time_slots import effective_worked_minutes
 
 
 def _minutes_to_hhmm(minutes: int) -> str:
@@ -77,7 +79,7 @@ def _build_schedule(
                 "day=", d,
                 "ranges=", ranges,
             )
-            hours = len(active_slots) * artifacts.slot_minutes / 60.0
+            hours = effective_worked_minutes(len(active_slots) * artifacts.slot_minutes) / 60.0
             schedule[emp_name]["days"][day_name] = {
                 "ranges": ranges,
                 "hours": hours,
@@ -128,7 +130,10 @@ def run_weekly_v1_engine(
     )
 
     kpi = compute_v1_kpi(artifacts, solve_output.x_values)
-    explanation = build_v1_explanation(solver_status=solve_output.solver_status, kpi=kpi)
+    explanation_employees = [
+        {"id": employee_id, "contract_hours": contract_hours}
+        for employee_id, contract_hours in zip(employees, contracts)
+    ]
 
     metrics = {
         "num_variables": solve_output.num_variables,
@@ -147,10 +152,10 @@ def run_weekly_v1_engine(
         "solve_time_seconds": solve_output.wall_time_seconds,
         "metrics": metrics,
         "kpi": kpi,
-        "explanation": explanation,
         "hours_per_employee": solve_output.hours_per_employee,
         "solver_result": solve_output.solver_result,
     }
+    result["explanation"] = explain_planning(result, explanation_employees)
 
     if solve_output.solver_status in ("OPTIMAL", "FEASIBLE"):
         schedule, coverage_slots_per_day = _build_schedule(artifacts, solve_output)
@@ -171,5 +176,7 @@ def run_weekly_v1_engine(
             result["error"] = "Aucune solution conforme n'a ete trouvee."
         elif solve_output.solver_status == "UNKNOWN":
             result["error"] = "Timeout solveur: aucune solution garantie dans le temps imparti."
+
+    result["kpi_summary"] = calculate_kpi(result)
 
     return result

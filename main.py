@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,6 +92,20 @@ class AdjustPlanningRequest(PlanningRequest):
     coverage_overrides: Optional[Dict[int, int]] = Field(default=None)
 
 
+class SimulatePlanningRequest(BaseModel):
+    employees: List[str] = Field(..., min_length=1)
+    contracts: List[float] = Field(..., min_length=1)
+    roles: List[str] = Field(..., min_length=1)
+    opening_hours: Dict[str, Any]
+    min_staff: Union[int, List[int], Dict[str, int]]
+
+
+class SimulatePlanningResponse(BaseModel):
+    schedule: Optional[Dict[str, EmployeeSchedule]] = None
+    kpi_summary: Optional[Dict[str, Any]] = None
+    explanation: Optional[Dict[str, Any]] = None
+
+
 @app.get("/")
 def health() -> Dict[str, str]:
     return {"status": "ok", "engine": "easyplan-v1-weekly-strict"}
@@ -125,6 +139,59 @@ def _response_from_engine_output(output: Dict[str, Any]) -> PlanningResponse:
         classification=None,
         explanation=output.get("explanation"),
     )
+
+
+def _parse_hhmm_to_minutes(value: str) -> int:
+    parts = value.split(":")
+    if len(parts) != 2:
+        raise ValueError(f"Heure invalide: {value}")
+    hours = int(parts[0])
+    minutes = int(parts[1])
+    if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+        raise ValueError(f"Heure invalide: {value}")
+    return hours * 60 + minutes
+
+
+def _build_simulation_days_and_config(request: SimulatePlanningRequest) -> tuple[List[str], Dict[str, Any]]:
+    config = _prepare_config({}, None)
+    schedule_cfg = config.setdefault("schedule", {})
+
+    opening_hours = request.opening_hours or {}
+    reserved_keys = {"open", "close", "start_time_minutes", "end_time_minutes"}
+    day_keys = [key for key in opening_hours.keys() if key not in reserved_keys]
+
+    if day_keys:
+        days = day_keys
+        first_day_conf = opening_hours.get(days[0], {}) or {}
+        open_time = first_day_conf.get("open")
+        close_time = first_day_conf.get("close")
+        if open_time is not None and close_time is not None:
+            schedule_cfg["start_time_minutes"] = _parse_hhmm_to_minutes(str(open_time))
+            schedule_cfg["end_time_minutes"] = _parse_hhmm_to_minutes(str(close_time))
+    else:
+        days = [f"J{i}" for i in range(7)]
+        if "start_time_minutes" in opening_hours and "end_time_minutes" in opening_hours:
+            schedule_cfg["start_time_minutes"] = int(opening_hours["start_time_minutes"])
+            schedule_cfg["end_time_minutes"] = int(opening_hours["end_time_minutes"])
+        elif "open" in opening_hours and "close" in opening_hours:
+            schedule_cfg["start_time_minutes"] = _parse_hhmm_to_minutes(str(opening_hours["open"]))
+            schedule_cfg["end_time_minutes"] = _parse_hhmm_to_minutes(str(opening_hours["close"]))
+
+    min_staff = request.min_staff
+    if isinstance(min_staff, int):
+        schedule_cfg["min_staff_per_slot"] = int(min_staff)
+    elif isinstance(min_staff, list):
+        if len(min_staff) != len(days):
+            raise ValueError("min_staff (liste) doit avoir la meme longueur que les jours.")
+        schedule_cfg["min_staff_per_day"] = [int(v) for v in min_staff]
+    elif isinstance(min_staff, dict):
+        if not day_keys:
+            raise ValueError("min_staff (dict) requiert opening_hours avec jours explicites.")
+        schedule_cfg["min_staff_per_day"] = [int(min_staff.get(day, 1)) for day in days]
+    else:
+        raise ValueError("Format min_staff non supporte.")
+
+    return days, config
 
 
 @app.post("/generate-planning", response_model=PlanningResponse)
@@ -212,3 +279,27 @@ def adjust_planning(request: AdjustPlanningRequest) -> PlanningResponse:
         raise HTTPException(status_code=500, detail=f"Erreur solveur: {exc}")
 
     return _response_from_engine_output(output)
+
+
+@app.post("/simulate-planning", response_model=SimulatePlanningResponse)
+def simulate_planning(request: SimulatePlanningRequest) -> SimulatePlanningResponse:
+    try:
+        days, config = _build_simulation_days_and_config(request)
+        output = run_weekly_v1_engine(
+            employees=request.employees,
+            contracts=request.contracts,
+            roles=request.roles,
+            days=days,
+            config=config,
+            unavailabilities=[],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erreur solveur: {exc}")
+
+    return SimulatePlanningResponse(
+        schedule=output.get("schedule"),
+        kpi_summary=output.get("kpi_summary"),
+        explanation=output.get("explanation"),
+    )
