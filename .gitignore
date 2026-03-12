@@ -1,4 +1,24 @@
+# macOS
+.DS_Store
+
+# python
 __pycache__/
+*.pyc
+
+# virtualenv
+venv/
+
+# node
+node_modules/
+
+# build
+dist/
+
+# typescript
+*.tsbuildinfo
+
+# env
+.env__pycache__/
 *.py[cod]
 *$py.class
 *.so
