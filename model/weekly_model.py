@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ortools.sat.python import cp_model
 
@@ -157,6 +157,30 @@ def _contracts_to_slots(contracts: List[float], slot_minutes: int) -> List[int]:
     return slots
 
 
+def _resolve_constraint_day_index(day_value: Any, days: List[str]) -> Optional[int]:
+    if day_value is None:
+        return None
+
+    day_str = str(day_value)
+    if day_str in days:
+        return days.index(day_str)
+
+    weekday_order = [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+    ]
+    normalized = day_str.strip().lower()
+    if len(days) == 7 and normalized in weekday_order:
+        return weekday_order.index(normalized)
+
+    return None
+
+
 def build_weekly_model(
     *,
     employees: List[str],
@@ -165,6 +189,7 @@ def build_weekly_model(
     days: List[str],
     config: dict,
     unavailabilities: Optional[List[Tuple[int, ...]]] = None,
+    constraints: Optional[List[Dict[str, Any]]] = None,
 ) -> WeeklyModelArtifacts:
     if len(days) != 7:
         raise ValueError("V1 strict: le planning doit contenir exactement 7 jours.")
@@ -231,6 +256,29 @@ def build_weekly_model(
                 x[(e, d, s)] = var
                 if d in closed_days:
                     model.Add(var == 0)
+
+    employee_index = {
+        (employee["name"] if isinstance(employee, dict) and "name" in employee else employee): i
+        for i, employee in enumerate(employees)
+    }
+    for c in constraints or []:
+        if c.get("type") == "extra_staff_day":
+            day_idx = _resolve_constraint_day_index(c.get("day"), days)
+            extra_staff = int(c.get("extra_staff", 1))
+            if day_idx is not None and day_idx not in closed_days and extra_staff > 0:
+                min_staff_per_day[day_idx] += extra_staff
+
+    for c in constraints or []:
+        if c.get("type") == "unavailability":
+            emp = c.get("employee")
+            day = c.get("day")
+            day_idx = _resolve_constraint_day_index(day, days)
+            if emp in employee_index and day_idx is not None:
+                print("UNAVAILABILITY APPLIED:", emp, day)
+                e = employee_index[emp]
+                d = day_idx
+                for s in range(num_slots):
+                    model.Add(x[(e, d, s)] == 0)
 
     # HARD: span maximal journalier (10h) via premier et dernier slot travailles.
     max_day_slots = (600 + slot_minutes - 1) // slot_minutes
@@ -363,6 +411,49 @@ def build_weekly_model(
     soft_penalties.append(
         LONG_SHIFT_WEIGHT * sum(long_shift_vars[(e, d)] for e in range(num_employees) for d in range(num_days))
     )
+
+    # Structured constraints: prefer_morning (soft). Penalise les shifts qui commencent apres 12h.
+    preference_weight = int(soft_weights.get("preference_weight", 20))
+    noon_minutes = 12 * 60
+    noon_slot = max(0, (noon_minutes - start_time_minutes + slot_minutes - 1) // slot_minutes)
+    penalty_preference_vars: List[cp_model.IntVar] = []
+    for constraint in constraints or []:
+        if constraint.get("type") != "prefer_morning":
+            continue
+        employee = constraint.get("employee")
+        if employee not in employee_index:
+            continue
+        emp_idx = employee_index[employee]
+        day_idx = _resolve_constraint_day_index(constraint.get("day"), days)
+        target_days = [day_idx] if day_idx is not None else list(range(num_days))
+        for d in target_days:
+            late_starts = [start_vars[(emp_idx, d, s)] for s in range(noon_slot, num_slots)]
+            if not late_starts:
+                continue
+            penalty_preference = model.NewIntVar(0, 1, f"penalty_preference_{emp_idx}_{d}")
+            model.Add(penalty_preference == sum(late_starts))
+            penalty_preference_vars.append(penalty_preference)
+    if penalty_preference_vars:
+        soft_penalties.append(preference_weight * sum(penalty_preference_vars))
+
+    # Structured constraints: avoid_closing (soft). Penalise les shifts terminant a l'heure de fermeture.
+    avoid_closing_weight = int(soft_weights.get("avoid_closing_weight", 20))
+    avoid_closing_vars: List[cp_model.IntVar] = []
+    if num_slots > 0:
+        closing_slot_idx = num_slots - 1
+        for constraint in constraints or []:
+            if constraint.get("type") != "avoid_closing":
+                continue
+            employee = constraint.get("employee")
+            if employee not in employee_index:
+                continue
+            emp_idx = employee_index[employee]
+            day_idx = _resolve_constraint_day_index(constraint.get("day"), days)
+            target_days = [day_idx] if day_idx is not None else list(range(num_days))
+            for d in target_days:
+                avoid_closing_vars.append(x[(emp_idx, d, closing_slot_idx)])
+    if avoid_closing_vars:
+        soft_penalties.append(avoid_closing_weight * sum(avoid_closing_vars))
 
     # SOFT: couverture par slot.
     coverage_weight = int(soft_weights.get("coverage_weight", 10))

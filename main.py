@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -18,13 +21,18 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:5174",
+        "https://easyplan-ochre.vercel.app",
+        "https://easyplan-git-codex-v1-weekly-stable-matthieu-le-nys-projects.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 class PreviousMonthStats(BaseModel):
@@ -37,6 +45,7 @@ class PlanningRequest(BaseModel):
     contracts: List[float] = Field(..., min_length=1)
     roles: List[str] = Field(..., min_length=1)
     days: List[str] = Field(..., min_length=1)
+    constraints: Optional[List[Dict[str, Any]]] = Field(default=None)
     unavailabilities: Optional[List[List[int]]] = Field(default=[])
     config: Optional[Dict[str, Any]] = Field(default=None)
     previous_month_stats: Optional[PreviousMonthStats] = Field(default=None)
@@ -96,7 +105,9 @@ class SimulatePlanningRequest(BaseModel):
     employees: List[str] = Field(..., min_length=1)
     contracts: List[float] = Field(..., min_length=1)
     roles: List[str] = Field(..., min_length=1)
+    constraints: Optional[List[Dict[str, Any]]] = Field(default=None)
     opening_hours: Dict[str, Any]
+    opening_days: Optional[List[str]] = Field(default=None)
     min_staff: Union[int, List[int], Dict[str, int]]
 
 
@@ -107,7 +118,7 @@ class SimulatePlanningResponse(BaseModel):
 
 
 @app.get("/")
-def health() -> Dict[str, str]:
+def root_status() -> Dict[str, str]:
     return {"status": "ok", "engine": "easyplan-v1-weekly-strict"}
 
 
@@ -152,12 +163,42 @@ def _parse_hhmm_to_minutes(value: str) -> int:
     return hours * 60 + minutes
 
 
+WEEKDAY_ORDER = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+]
+
+
+def _normalize_opening_days(opening_days: Optional[List[str]]) -> List[str]:
+    if opening_days is None:
+        return list(WEEKDAY_ORDER)
+
+    normalized_days: List[str] = []
+    for day in opening_days:
+        normalized = str(day).strip().lower()
+        if normalized not in WEEKDAY_ORDER:
+            raise ValueError(f"Jour d'ouverture invalide: {day}")
+        if normalized not in normalized_days:
+            normalized_days.append(normalized)
+
+    if not normalized_days:
+        raise ValueError("Au moins un jour d'ouverture est requis.")
+
+    return normalized_days
+
+
 def _build_simulation_days_and_config(request: SimulatePlanningRequest) -> tuple[List[str], Dict[str, Any]]:
     config = _prepare_config({}, None)
     schedule_cfg = config.setdefault("schedule", {})
+    normalized_opening_days = _normalize_opening_days(request.opening_days)
 
     opening_hours = request.opening_hours or {}
-    reserved_keys = {"open", "close", "start_time_minutes", "end_time_minutes"}
+    reserved_keys = {"open", "close", "start_time_minutes", "end_time_minutes", "opening_days", "closed_weekdays"}
     day_keys = [key for key in opening_hours.keys() if key not in reserved_keys]
 
     if day_keys:
@@ -176,6 +217,11 @@ def _build_simulation_days_and_config(request: SimulatePlanningRequest) -> tuple
         elif "open" in opening_hours and "close" in opening_hours:
             schedule_cfg["start_time_minutes"] = _parse_hhmm_to_minutes(str(opening_hours["open"]))
             schedule_cfg["end_time_minutes"] = _parse_hhmm_to_minutes(str(opening_hours["close"]))
+        config["closed_weekdays"] = [
+            weekday_idx
+            for weekday_idx, weekday_name in enumerate(WEEKDAY_ORDER)
+            if weekday_name not in normalized_opening_days
+        ]
 
     min_staff = request.min_staff
     if isinstance(min_staff, int):
@@ -208,6 +254,7 @@ def generate_planning(request: PlanningRequest) -> PlanningResponse:
             employees=request.employees,
             contracts=request.contracts,
             roles=request.roles,
+            constraints=request.constraints,
             days=request.days,
             config=config,
             unavailabilities=unavailabilities,
@@ -261,6 +308,7 @@ def adjust_planning(request: AdjustPlanningRequest) -> PlanningResponse:
             employees=employees,
             contracts=contracts,
             roles=request.roles,
+            constraints=request.constraints,
             days=request.days,
             config=config,
             unavailabilities=unavailabilities,
@@ -289,6 +337,7 @@ def simulate_planning(request: SimulatePlanningRequest) -> SimulatePlanningRespo
             employees=request.employees,
             contracts=request.contracts,
             roles=request.roles,
+            constraints=request.constraints,
             days=days,
             config=config,
             unavailabilities=[],
@@ -303,3 +352,17 @@ def simulate_planning(request: SimulatePlanningRequest) -> SimulatePlanningRespo
         kpi_summary=output.get("kpi_summary"),
         explanation=output.get("explanation"),
     )
+
+
+frontend_path = "frontend/dist"
+
+if os.path.exists(frontend_path):
+    app.mount("/assets", StaticFiles(directory=f"{frontend_path}/assets"), name="assets")
+
+
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    index_path = os.path.join(frontend_path, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"message": "frontend not built"}

@@ -1,7 +1,11 @@
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 
-def explain_planning(result: Dict[str, Any], employees: List[Dict[str, Any]]) -> Dict[str, Any]:
+def explain_planning(
+    result: Dict[str, Any],
+    employees: List[Dict[str, Any]],
+    constraints: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """
     Analyse le résultat du solveur et produit une explication métier du planning.
 
@@ -24,11 +28,18 @@ def explain_planning(result: Dict[str, Any], employees: List[Dict[str, Any]]) ->
 
     employee_analysis = _analyze_employees(result, employees)
     coverage_analysis = _analyze_coverage(result, employees)
-    global_analysis = _global_message(coverage_analysis)
+    constraints_analysis = _analyze_constraints(constraints or [])
+    global_analysis = _global_message(
+        coverage_analysis,
+        result.get("status", ""),
+        constraints or [],
+    )
 
     return {
         "employee_analysis": employee_analysis,
         "coverage_analysis": coverage_analysis,
+        "preferences_analysis": constraints_analysis,
+        "constraints": constraints_analysis,
         "global_analysis": global_analysis,
     }
 
@@ -97,7 +108,65 @@ def _analyze_coverage(result: Dict[str, Any], employees: List[Dict[str, Any]]) -
         "coverage_status": status
     }
 
-def _global_message(coverage: Dict[str, Any]) -> Dict[str, str]:
+def _analyze_constraints(constraints: List[Dict[str, Any]]) -> List[str]:
+    messages: List[str] = []
+    for constraint in constraints:
+        constraint_type = constraint.get("type")
+        employee = constraint.get("employee")
+        if constraint_type == "unavailability":
+            if not employee:
+                continue
+            day = constraint.get("day")
+            if day:
+                messages.append(f"{employee} indisponible {_to_french_day(str(day))}")
+        elif constraint_type == "prefer_morning" and employee:
+            day = constraint.get("day")
+            if day:
+                messages.append(f"{employee} prefere les matinees le {_to_french_day(str(day))}")
+            else:
+                messages.append(f"{employee} prefere les matinees")
+        elif constraint_type == "avoid_closing" and employee:
+            day = constraint.get("day")
+            if day:
+                messages.append(f"{employee} evite la fermeture le {_to_french_day(str(day))}")
+            else:
+                messages.append(f"{employee} evite la fermeture")
+        elif constraint_type == "extra_staff_day":
+            day = constraint.get("day")
+            extra_staff = int(constraint.get("extra_staff", 1))
+            if day:
+                messages.append(f"Renfort +{extra_staff} sur {_to_french_day(str(day))}")
+        elif constraint_type == "prefer_afternoon" and employee:
+            messages.append(f"{employee} prefere les apres-midis")
+    return messages
+
+
+def _to_french_day(day_en: str) -> str:
+    day_map = {
+        "monday": "lundi",
+        "tuesday": "mardi",
+        "wednesday": "mercredi",
+        "thursday": "jeudi",
+        "friday": "vendredi",
+        "saturday": "samedi",
+        "sunday": "dimanche",
+    }
+    return day_map.get(day_en.lower(), day_en)
+
+
+def _global_message(
+    coverage: Dict[str, Any],
+    planning_status: str,
+    constraints: List[Dict[str, Any]],
+) -> Dict[str, str]:
+
+    if planning_status == "infeasible":
+        for constraint in constraints:
+            if constraint.get("type") == "unavailability" and constraint.get("employee") and constraint.get("day"):
+                employee = str(constraint["employee"])
+                day_fr = _to_french_day(str(constraint["day"]))
+                return {"message": f"Planning impossible depuis que {employee} est indisponible le {day_fr}."}
+        return {"message": "Planning impossible avec les contraintes actuelles."}
 
     required = coverage["total_required_hours"]
     contract = coverage["total_contract_hours"]

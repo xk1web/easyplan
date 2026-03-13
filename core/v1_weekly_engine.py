@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.explanation.planning_explainer import explain_planning
 from core.metrics.kpi_calculator import calculate_kpi
@@ -95,6 +95,7 @@ def run_weekly_v1_engine(
     employees: List[str],
     contracts: List[float],
     roles: List[str],
+    constraints=None,
     days: List[str],
     config: dict,
     unavailabilities: Optional[List[Tuple[int, ...]]] = None,
@@ -109,6 +110,8 @@ def run_weekly_v1_engine(
     print("ENGINE INPUT DEBUG")
     print("opening_hours received:", opening_hours)
     print("employees received:", employees)
+    if constraints:
+        print("constraints received:", constraints)
 
     artifacts = build_weekly_model(
         employees=employees,
@@ -117,6 +120,7 @@ def run_weekly_v1_engine(
         days=days,
         config=config,
         unavailabilities=unavailabilities,
+        constraints=constraints,
     )
 
     solver_cfg = config.get("solver", {})
@@ -155,7 +159,7 @@ def run_weekly_v1_engine(
         "hours_per_employee": solve_output.hours_per_employee,
         "solver_result": solve_output.solver_result,
     }
-    result["explanation"] = explain_planning(result, explanation_employees)
+    result["explanation"] = explain_planning(result, explanation_employees, constraints=constraints)
 
     if solve_output.solver_status in ("OPTIMAL", "FEASIBLE"):
         schedule, coverage_slots_per_day = _build_schedule(artifacts, solve_output)
