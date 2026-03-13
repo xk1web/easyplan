@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -99,6 +99,9 @@ class AdjustPlanningRequest(PlanningRequest):
     contract_overrides: Optional[Dict[str, float]] = Field(default=None)
     overtime_max: Optional[int] = Field(default=None)
     coverage_overrides: Optional[Dict[int, int]] = Field(default=None)
+    employee: Optional[str] = Field(default=None)
+    day: Optional[str] = Field(default=None)
+    new_status: Optional[Literal["working", "off", "unavailable"]] = Field(default=None)
 
 
 class SimulatePlanningRequest(BaseModel):
@@ -286,6 +289,17 @@ def adjust_planning(request: AdjustPlanningRequest) -> PlanningResponse:
     employees = list(request.employees)
     contracts = list(request.contracts)
 
+    constraints = list(request.constraints or [])
+    if request.employee and request.day and request.new_status:
+        constraints.append(
+            {
+                "type": "day_status",
+                "employee": request.employee,
+                "day": request.day,
+                "status": request.new_status,
+            }
+        )
+
     if request.contract_overrides:
         for name, new_contract in request.contract_overrides.items():
             if name in employees:
@@ -308,7 +322,7 @@ def adjust_planning(request: AdjustPlanningRequest) -> PlanningResponse:
             employees=employees,
             contracts=contracts,
             roles=request.roles,
-            constraints=request.constraints,
+            constraints=constraints,
             days=request.days,
             config=config,
             unavailabilities=unavailabilities,

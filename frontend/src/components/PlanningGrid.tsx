@@ -15,6 +15,12 @@ type EmployeeSchedule = {
 
 type PlanningGridProps = {
   schedule?: Record<string, EmployeeSchedule> | null;
+  onCellStatusChange?: (payload: {
+    employee: string;
+    day: string;
+    new_status: "working" | "off" | "unavailable";
+  }) => void;
+  cellStatuses?: Record<string, "working" | "off" | "unavailable">;
 };
 
 const DAY_LABELS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"] as const;
@@ -41,7 +47,7 @@ const resolveDayKeys = (schedule: Record<string, EmployeeSchedule>) => {
   return fallback;
 };
 
-const PlanningGrid = ({ schedule }: PlanningGridProps) => {
+const PlanningGrid = ({ schedule, onCellStatusChange, cellStatuses }: PlanningGridProps) => {
   if (!schedule || Object.keys(schedule).length === 0) {
     return <p className="empty-state">Aucun planning disponible pour le moment.</p>;
   }
@@ -66,11 +72,37 @@ const PlanningGrid = ({ schedule }: PlanningGridProps) => {
               <td className="table__employee">{employeeName}</td>
               {dayKeys.map((dayKey, index) => {
                 const dayData = employeeSchedule.days[dayKey];
-                if (!dayData || dayData.ranges.length === 0) {
-                  return <td key={`${employeeName}-${DAY_LABELS[index]}`}>OFF</td>;
-                }
-                const shift = dayData.ranges.map((range) => `${range.start}-${range.end}`).join(", ");
-                return <td key={`${employeeName}-${DAY_LABELS[index]}`}>{shift}</td>;
+                const isWorking = Boolean(dayData && dayData.ranges.length > 0);
+                const shift = isWorking
+                  ? dayData!.ranges.map((range) => `${range.start}-${range.end}`).join(", ")
+                  : "OFF";
+                const key = `${employeeName}__${dayKey}`;
+                const currentStatus = cellStatuses?.[key] ?? (isWorking ? "working" : "off");
+
+                return (
+                  <td key={`${employeeName}-${DAY_LABELS[index]}`}>
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      <span>{shift}</span>
+                      <select
+                        aria-label={`Modifier ${employeeName} ${DAY_LABELS[index]}`}
+                        value={currentStatus}
+                        onChange={(event) => {
+                          const value = event.target.value as "working" | "off" | "unavailable";
+                          onCellStatusChange?.({
+                            employee: employeeName,
+                            day: dayKey,
+                            new_status: value,
+                          });
+                        }}
+                        style={{ maxWidth: "140px" }}
+                      >
+                        <option value="working">Working</option>
+                        <option value="off">Off</option>
+                        <option value="unavailable">Unavailable</option>
+                      </select>
+                    </div>
+                  </td>
+                );
               })}
               <td>{employeeSchedule.total_hours.toFixed(1)}h</td>
             </tr>

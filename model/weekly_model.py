@@ -280,6 +280,31 @@ def build_weekly_model(
                 for s in range(num_slots):
                     model.Add(x[(e, d, s)] == 0)
 
+    for c in constraints or []:
+        if c.get("type") == "day_status":
+            emp = c.get("employee")
+            day = c.get("day")
+            status = str(c.get("status") or "").strip().lower()
+            day_idx = _resolve_constraint_day_index(day, days)
+
+            if emp not in employee_index:
+                raise ValueError(f"Contrainte day_status invalide: employe inconnu: {emp}")
+            if day_idx is None:
+                raise ValueError(f"Contrainte day_status invalide: jour inconnu: {day}")
+            if day_idx in closed_days:
+                raise ValueError(f"Contrainte day_status invalide: jour ferme: {day}")
+
+            e = employee_index[emp]
+            d = day_idx
+
+            if status in ("off", "unavailable"):
+                for s in range(num_slots):
+                    model.Add(x[(e, d, s)] == 0)
+            elif status == "working":
+                model.Add(sum(x[(e, d, s)] for s in range(num_slots)) >= min_day_slots)
+            else:
+                raise ValueError(f"Contrainte day_status invalide: status inconnu: {status}")
+
     # HARD: span maximal journalier (10h) via premier et dernier slot travailles.
     max_day_slots = (600 + slot_minutes - 1) // slot_minutes
     for e in range(num_employees):
