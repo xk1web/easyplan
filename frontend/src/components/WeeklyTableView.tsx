@@ -41,8 +41,6 @@ const WeeklyTableView = ({ schedule, days }: WeeklyTableViewProps) => {
             <td>{employeeName}</td>
             {days.map((day) => {
               const dayData = employeeData.days[day];
-              const ranges = dayData?.ranges ?? [];
-              console.log("[DEBUG FRONTEND RANGES]", employeeName, day, ranges);
               const isWorking = Boolean(dayData && dayData.ranges.length > 0);
               const content = isWorking
                 ? dayData!.ranges.map((range) => `${range.start}\u2013${range.end}`).join(", ")

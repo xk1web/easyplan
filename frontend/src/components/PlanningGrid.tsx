@@ -43,37 +43,41 @@ const resolveDayKeys = (schedule: Record<string, EmployeeSchedule>) => {
 
 const PlanningGrid = ({ schedule }: PlanningGridProps) => {
   if (!schedule || Object.keys(schedule).length === 0) {
-    return <p>Aucun planning.</p>;
+    return <p className="empty-state">Aucun planning disponible pour le moment.</p>;
   }
 
   const dayKeys = resolveDayKeys(schedule);
 
   return (
-    <table className="table weekly-table">
-      <thead>
-        <tr>
-          <th>Employe</th>
-          {DAY_LABELS.map((label) => (
-            <th key={label}>{label}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {Object.entries(schedule).map(([employeeName, employeeSchedule]) => (
-          <tr key={employeeName}>
-            <td>{employeeName}</td>
-            {dayKeys.map((dayKey, index) => {
-              const dayData = employeeSchedule.days[dayKey];
-              if (!dayData || dayData.ranges.length === 0) {
-                return <td key={`${employeeName}-${DAY_LABELS[index]}`}>—</td>;
-              }
-              const shift = dayData.ranges.map((range) => `${range.start}-${range.end}`).join(", ");
-              return <td key={`${employeeName}-${DAY_LABELS[index]}`}>{shift}</td>;
-            })}
+    <div className="table-wrapper">
+      <table className="table weekly-table">
+        <thead>
+          <tr>
+            <th>Employé</th>
+            {DAY_LABELS.map((label) => (
+              <th key={label}>{label}</th>
+            ))}
+            <th>Total</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {Object.entries(schedule).map(([employeeName, employeeSchedule]) => (
+            <tr key={employeeName}>
+              <td className="table__employee">{employeeName}</td>
+              {dayKeys.map((dayKey, index) => {
+                const dayData = employeeSchedule.days[dayKey];
+                if (!dayData || dayData.ranges.length === 0) {
+                  return <td key={`${employeeName}-${DAY_LABELS[index]}`}>OFF</td>;
+                }
+                const shift = dayData.ranges.map((range) => `${range.start}-${range.end}`).join(", ");
+                return <td key={`${employeeName}-${DAY_LABELS[index]}`}>{shift}</td>;
+              })}
+              <td>{employeeSchedule.total_hours.toFixed(1)}h</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 };
 

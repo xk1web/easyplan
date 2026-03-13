@@ -11,7 +11,6 @@ type PlanningViewProps = {
 const PlanningView = ({ result }: PlanningViewProps) => {
   const [viewMode, setViewMode] = useState<"table" | "list">("table");
   const schedule = result?.schedule;
-  console.log("[DEBUG FRONTEND SCHEDULE PAYLOAD]", schedule);
   const toNumber = (value: unknown, fallback = 0): number =>
     typeof value === "number" && Number.isFinite(value) ? value : fallback;
   const kpi = result?.kpi as Record<string, unknown> | undefined;
@@ -181,7 +180,6 @@ const PlanningView = ({ result }: PlanningViewProps) => {
                     <div>Aucun shift</div>
                   ) : (
                     orderedDays.map(([day, dayData]) => {
-                      console.log("[DEBUG FRONTEND RANGES]", employeeName, day, dayData.ranges);
                       const ranges = dayData.ranges
                         .map((range) => `${range.start}-${range.end}`)
                         .join(", ");

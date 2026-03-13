@@ -44,16 +44,40 @@ const KpiPanel = ({ kpiSummary }: KpiPanelProps) => {
   const surstaffingHours = getNumber(kpiSummary, ["surstaffing_hours", "surstaffing_net"]);
   const undercoverageHours = getNumber(kpiSummary, ["undercoverage_hours", "sous_couverture_nette"]);
   const tensionRate = getNumber(kpiSummary, ["tension_rate", "taux_tension_percent"]);
+  const coverageGap = Math.max(0, totalRequiredHours - totalPlannedHours);
+  const fillRate = totalRequiredHours > 0 ? (totalPlannedHours / totalRequiredHours) * 100 : 0;
 
   return (
-    <div className="card panel__stack">
-      <div>Total contract hours: {totalContractHours.toFixed(2)}</div>
-      <div>Total required hours: {totalRequiredHours.toFixed(2)}</div>
-      <div>Total planned hours: {totalPlannedHours.toFixed(2)}</div>
-      <div>Surstaffing hours: {surstaffingHours.toFixed(2)}</div>
-      <div>Undercoverage hours: {undercoverageHours.toFixed(2)}</div>
-      <div style={tensionStyle(tensionRate)}>Tension rate: {tensionRate.toFixed(2)}</div>
-      <div style={tensionStyle(tensionRate)}>{tensionDiagnostic(tensionRate)}</div>
+    <div className="kpi-panel">
+      <div className="kpi-card">
+        <p>Heures contractuelles</p>
+        <strong>{totalContractHours.toFixed(1)}h</strong>
+      </div>
+      <div className="kpi-card">
+        <p>Heures requises</p>
+        <strong>{totalRequiredHours.toFixed(1)}h</strong>
+      </div>
+      <div className="kpi-card">
+        <p>Heures planifiées</p>
+        <strong>{totalPlannedHours.toFixed(1)}h</strong>
+      </div>
+      <div className="kpi-card">
+        <p>Taux de couverture</p>
+        <strong>{fillRate.toFixed(1)}%</strong>
+      </div>
+      <div className="kpi-card">
+        <p>Sous-couverture</p>
+        <strong>{Math.max(undercoverageHours, coverageGap).toFixed(1)}h</strong>
+      </div>
+      <div className="kpi-card">
+        <p>Surstaffing</p>
+        <strong>{surstaffingHours.toFixed(1)}h</strong>
+      </div>
+      <div className="kpi-card kpi-card--wide">
+        <p>Tension</p>
+        <strong style={tensionStyle(tensionRate)}>{tensionRate.toFixed(2)}</strong>
+        <span style={tensionStyle(tensionRate)}>{tensionDiagnostic(tensionRate)}</span>
+      </div>
     </div>
   );
 };

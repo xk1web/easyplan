@@ -6,15 +6,15 @@ const EmployeeLoadTable = ({ hoursPerEmployee }: EmployeeLoadTableProps) => {
   const entries = Object.entries(hoursPerEmployee);
 
   if (entries.length === 0) {
-    return <p>No employee load data.</p>;
+    return <p className="empty-state">Aucune charge employe.</p>;
   }
 
   return (
     <table className="table">
       <thead>
         <tr>
-          <th>Employee</th>
-          <th>Hours</th>
+          <th>Employe</th>
+          <th>Heures</th>
         </tr>
       </thead>
       <tbody>
