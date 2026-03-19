@@ -63,6 +63,17 @@ type GeneratePlanningResponse = {
   kpi?: Record<string, unknown> | null;
   explanation?: Record<string, unknown> | null;
   error?: string | null;
+  overrides_applied?: Array<{
+    employee: string;
+    day: string;
+    new_status: "working" | "off" | "unavailable";
+  }> | null;
+  overrides_rejected?: Array<{
+    employee: string;
+    day: string;
+    new_status: "working" | "off" | "unavailable";
+    reason?: string;
+  }> | null;
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
@@ -139,6 +150,10 @@ const SimulatorPanel = () => {
   const [generatedExplanation, setGeneratedExplanation] = useState<Record<string, unknown> | null>(null);
   const [draftCellStatuses, setDraftCellStatuses] = useState<Record<string, "working" | "off" | "unavailable">>({});
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [overrideResult, setOverrideResult] = useState<{
+    applied: Array<{ employee: string; day: string; new_status: "working" | "off" | "unavailable" }>;
+    rejected: Array<{ employee: string; day: string; new_status: "working" | "off" | "unavailable"; reason?: string }>;
+  }>({ applied: [], rejected: [] });
   const [constraints, setConstraints] = useState<ManagerConstraint[]>([]);
   const [constraintEmployee, setConstraintEmployee] = useState(INITIAL_EMPLOYEES[0]?.name ?? "");
   const [constraintDay, setConstraintDay] = useState("monday");
@@ -310,6 +325,7 @@ const SimulatorPanel = () => {
       setDraftPlanning(null);
       setDraftCellStatuses({});
       setHasUnsavedChanges(false);
+      setOverrideResult({ applied: [], rejected: [] });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(message);
@@ -337,6 +353,7 @@ const SimulatorPanel = () => {
     setGeneratedExplanation(null);
     setDraftCellStatuses({});
     setHasUnsavedChanges(false);
+    setOverrideResult({ applied: [], rejected: [] });
     setConstraints([]);
     setConstraintEmployee(INITIAL_EMPLOYEES[0]?.name ?? "");
     setConstraintDay("monday");
@@ -436,6 +453,7 @@ const SimulatorPanel = () => {
       const payloadWithOverrides = {
         ...payload,
         manual_overrides: manualOverrides,
+        manual_override_mode: "soft",
       };
       const response = await fetch(buildUrl("/generate-planning"), {
         method: "POST",
@@ -454,6 +472,10 @@ const SimulatorPanel = () => {
       setDraftPlanning(nextPlanning);
       setGeneratedKpi(data.kpi ?? null);
       setGeneratedExplanation(data.explanation ?? null);
+      setOverrideResult({
+        applied: data.overrides_applied ?? [],
+        rejected: data.overrides_rejected ?? [],
+      });
       setDraftCellStatuses({});
       setHasUnsavedChanges(false);
     } catch (err) {
@@ -492,10 +514,10 @@ const SimulatorPanel = () => {
   };
 
   const cancelManualChanges = () => {
-    setDraftPlanning(generatedPlanning);
-    setDraftCellStatuses({});
-    setHasUnsavedChanges(false);
-    setError(null);
+      setDraftPlanning(generatedPlanning);
+      setDraftCellStatuses({});
+      setHasUnsavedChanges(false);
+      setError(null);
   };
 
   const loadDemoStore = async () => {
@@ -540,6 +562,7 @@ const SimulatorPanel = () => {
       setDraftPlanning(nextPlanning);
       setGeneratedKpi(data.kpi ?? null);
       setGeneratedExplanation(data.explanation ?? null);
+      setOverrideResult({ applied: [], rejected: [] });
       setDraftCellStatuses({});
       setHasUnsavedChanges(false);
     } catch (err) {
@@ -549,6 +572,7 @@ const SimulatorPanel = () => {
       setDraftPlanning(null);
       setGeneratedKpi(null);
       setGeneratedExplanation(null);
+      setOverrideResult({ applied: [], rejected: [] });
     } finally {
       setLoadingGenerate(false);
     }
@@ -842,6 +866,28 @@ const SimulatorPanel = () => {
 
       <div className="decision-section">
         <h3>Planning</h3>
+        {generatedPlanning && (overrideResult.applied.length > 0 || overrideResult.rejected.length > 0) ? (
+          <div className="card">
+            <p style={{ margin: 0 }}>
+              Changements manuels respectes: <strong>{overrideResult.applied.length}</strong> - refuses:{" "}
+              <strong>{overrideResult.rejected.length}</strong>
+            </p>
+            {overrideResult.rejected.length > 0 ? (
+              <>
+                <p className="alert alert--warning" style={{ marginTop: "10px" }}>
+                  Certains changements n'etaient pas compatibles avec les contraintes legales ou de couverture.
+                </p>
+                <ul className="list-clean">
+                  {overrideResult.rejected.map((item, index) => (
+                    <li key={`override-rejected-${index}`}>
+                      {item.employee} {item.day} ({item.new_status}) - {item.reason ?? "Contrainte hard"}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+          </div>
+        ) : null}
         {generatedPlanning ? (
           <p className={hasUnsavedChanges ? "alert alert--warning" : "hint-text"}>
             {hasUnsavedChanges

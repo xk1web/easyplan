@@ -50,6 +50,7 @@ class PlanningRequest(BaseModel):
     config: Optional[Dict[str, Any]] = Field(default=None)
     previous_month_stats: Optional[PreviousMonthStats] = Field(default=None)
     manual_overrides: Optional[List[Dict[str, Any]]] = Field(default=None)
+    manual_override_mode: Literal["soft", "strict"] = Field(default="soft")
 
 
 class SolverMetrics(BaseModel):
@@ -94,6 +95,8 @@ class PlanningResponse(BaseModel):
     suggestions: Optional[List[str]] = None
     classification: Optional[str] = None
     explanation: Optional[Dict[str, Any]] = None
+    overrides_applied: Optional[List[Dict[str, Any]]] = None
+    overrides_rejected: Optional[List[Dict[str, Any]]] = None
 
 
 class AdjustPlanningRequest(PlanningRequest):
@@ -140,7 +143,12 @@ def _prepare_config(base_config: dict, request_config: Optional[Dict[str, Any]])
     return config
 
 
-def _response_from_engine_output(output: Dict[str, Any]) -> PlanningResponse:
+def _response_from_engine_output(
+    output: Dict[str, Any],
+    *,
+    overrides_applied: Optional[List[Dict[str, Any]]] = None,
+    overrides_rejected: Optional[List[Dict[str, Any]]] = None,
+) -> PlanningResponse:
     return PlanningResponse(
         status=output.get("status", "timeout"),
         schedule=output.get("schedule"),
@@ -153,12 +161,16 @@ def _response_from_engine_output(output: Dict[str, Any]) -> PlanningResponse:
         suggestions=None,
         classification=None,
         explanation=output.get("explanation"),
+        overrides_applied=overrides_applied,
+        overrides_rejected=overrides_rejected,
     )
 
 
 def _merge_manual_overrides(
     base_constraints: Optional[List[Dict[str, Any]]],
     manual_overrides: Optional[List[Dict[str, Any]]],
+    *,
+    mode: Literal["soft", "strict"],
 ) -> List[Dict[str, Any]]:
     constraints = list(base_constraints or [])
     overrides = manual_overrides or []
@@ -171,17 +183,73 @@ def _merge_manual_overrides(
         constraints = [
             c
             for c in constraints
-            if not (c.get("type") == "day_status" and c.get("employee") == employee and c.get("day") == day)
+            if not (
+                c.get("type") in ("day_status", "manual_override_preference")
+                and c.get("employee") == employee
+                and c.get("day") == day
+            )
         ]
-        constraints.append(
-            {
-                "type": "day_status",
-                "employee": employee,
-                "day": day,
-                "status": status,
-            }
-        )
+        if mode == "strict":
+            constraints.append(
+                {
+                    "type": "day_status",
+                    "employee": employee,
+                    "day": day,
+                    "status": status,
+                }
+            )
+        else:
+            constraints.append(
+                {
+                    "type": "manual_override_preference",
+                    "employee": employee,
+                    "day": day,
+                    "status": status,
+                }
+            )
     return constraints
+
+
+def _evaluate_manual_overrides(
+    schedule: Optional[Dict[str, Any]],
+    overrides: Optional[List[Dict[str, Any]]],
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    if not overrides:
+        return [], []
+    if schedule is None:
+        return [], [
+            {
+                **override,
+                "reason": "Aucune solution faisable avec les contraintes hard actuelles.",
+            }
+            for override in overrides
+        ]
+
+    applied: List[Dict[str, Any]] = []
+    rejected: List[Dict[str, Any]] = []
+    for override in overrides:
+        employee = override.get("employee")
+        day = override.get("day")
+        status = override.get("new_status")
+        if not employee or not day or status not in ("working", "off", "unavailable"):
+            rejected.append({**override, "reason": "Override invalide (employee/day/status)."})
+            continue
+
+        day_data = ((schedule.get(employee) or {}).get("days") or {}).get(day)
+        is_working = bool(day_data and len(day_data.get("ranges", [])) > 0)
+        wants_working = status == "working"
+
+        if wants_working == is_working:
+            applied.append(override)
+        else:
+            rejected.append(
+                {
+                    **override,
+                    "reason": "Incompatible avec contraintes hard (repos legal, couverture ou qualification).",
+                }
+            )
+
+    return applied, rejected
 
 
 def _parse_hhmm_to_minutes(value: str) -> int:
@@ -282,7 +350,11 @@ def generate_planning(request: PlanningRequest) -> PlanningResponse:
     unavailabilities = [tuple(u) for u in request.unavailabilities] if request.unavailabilities else []
 
     try:
-        merged_constraints = _merge_manual_overrides(request.constraints, request.manual_overrides)
+        merged_constraints = _merge_manual_overrides(
+            request.constraints,
+            request.manual_overrides,
+            mode=request.manual_override_mode,
+        )
         output = run_weekly_v1_engine(
             employees=request.employees,
             contracts=request.contracts,
@@ -305,7 +377,15 @@ def generate_planning(request: PlanningRequest) -> PlanningResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Erreur solveur: {exc}")
 
-    return _response_from_engine_output(output)
+    overrides_applied, overrides_rejected = _evaluate_manual_overrides(
+        output.get("schedule"),
+        request.manual_overrides,
+    )
+    return _response_from_engine_output(
+        output,
+        overrides_applied=overrides_applied,
+        overrides_rejected=overrides_rejected,
+    )
 
 
 @app.post("/adjust-planning", response_model=PlanningResponse)
@@ -319,7 +399,11 @@ def adjust_planning(request: AdjustPlanningRequest) -> PlanningResponse:
     employees = list(request.employees)
     contracts = list(request.contracts)
 
-    constraints = _merge_manual_overrides(request.constraints, request.manual_overrides)
+    constraints = _merge_manual_overrides(
+        request.constraints,
+        request.manual_overrides,
+        mode=request.manual_override_mode,
+    )
     if request.employee and request.day and request.new_status:
         constraints.append(
             {
@@ -370,7 +454,15 @@ def adjust_planning(request: AdjustPlanningRequest) -> PlanningResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Erreur solveur: {exc}")
 
-    return _response_from_engine_output(output)
+    overrides_applied, overrides_rejected = _evaluate_manual_overrides(
+        output.get("schedule"),
+        request.manual_overrides,
+    )
+    return _response_from_engine_output(
+        output,
+        overrides_applied=overrides_applied,
+        overrides_rejected=overrides_rejected,
+    )
 
 
 @app.post("/simulate-planning", response_model=SimulatePlanningResponse)

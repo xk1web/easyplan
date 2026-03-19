@@ -481,6 +481,33 @@ def build_weekly_model(
     if avoid_closing_vars:
         soft_penalties.append(avoid_closing_weight * sum(avoid_closing_vars))
 
+    # Structured constraints: manual overrides (soft by default).
+    # Penalise les ecarts entre le planning et les choix manuels.
+    manual_override_weight = int(soft_weights.get("manual_override_weight", 500))
+    for idx, constraint in enumerate(constraints or []):
+        if constraint.get("type") != "manual_override_preference":
+            continue
+        employee = constraint.get("employee")
+        status = str(constraint.get("status") or "").strip().lower()
+        day_idx = _resolve_constraint_day_index(constraint.get("day"), days)
+        if employee not in employee_index or day_idx is None:
+            continue
+
+        emp_idx = employee_index[employee]
+        shift_length = sum(x[(emp_idx, day_idx, s)] for s in range(num_slots))
+
+        if status == "working":
+            worked_any = model.NewBoolVar(f"manual_pref_worked_any_{idx}")
+            model.Add(shift_length >= 1).OnlyEnforceIf(worked_any)
+            model.Add(shift_length == 0).OnlyEnforceIf(worked_any.Not())
+            mismatch = model.NewIntVar(0, 1, f"manual_pref_mismatch_{idx}")
+            model.Add(mismatch == 1 - worked_any)
+            soft_penalties.append(mismatch * manual_override_weight)
+        elif status in ("off", "unavailable"):
+            mismatch_slots = model.NewIntVar(0, num_slots, f"manual_pref_off_mismatch_slots_{idx}")
+            model.Add(mismatch_slots == shift_length)
+            soft_penalties.append(mismatch_slots * manual_override_weight)
+
     # SOFT: couverture par slot.
     coverage_weight = int(soft_weights.get("coverage_weight", 10))
     for d in range(num_days):

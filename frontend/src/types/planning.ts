@@ -14,6 +14,7 @@ export interface PlanningRequest {
     day: string;
     new_status: "working" | "off" | "unavailable";
   }>;
+  manual_override_mode?: "soft" | "strict";
   config?: Record<string, unknown>;
   previous_month_stats?: PreviousMonthStats;
 }
@@ -74,4 +75,15 @@ export interface PlanningResponse {
   hours_per_employee?: Record<string, number> | null;
   suggestions?: string[] | null;
   classification?: string | null;
+  overrides_applied?: Array<{
+    employee: string;
+    day: string;
+    new_status: "working" | "off" | "unavailable";
+  }> | null;
+  overrides_rejected?: Array<{
+    employee: string;
+    day: string;
+    new_status: "working" | "off" | "unavailable";
+    reason?: string;
+  }> | null;
 }
