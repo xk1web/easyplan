@@ -16,6 +16,11 @@ type EmployeeSchedule = {
 type PlanningGridProps = {
   schedule?: Record<string, EmployeeSchedule> | null;
   editMode?: boolean;
+  onSwapDays?: (payload: {
+    employee: string;
+    sourceDay: string;
+    targetDay: string;
+  }) => void;
   onCellStatusChange?: (payload: {
     employee: string;
     day: string;
@@ -58,6 +63,7 @@ const resolveDayKeys = (schedule: Record<string, EmployeeSchedule>) => {
 const PlanningGrid = ({
   schedule,
   editMode = false,
+  onSwapDays,
   onCellStatusChange,
   onCellTimeChange,
   cellStatuses,
@@ -104,11 +110,39 @@ const PlanningGrid = ({
                   <td
                     key={`${employeeName}-${DAY_LABELS[index]}`}
                     className={isModified ? "planning-cell planning-cell--modified" : "planning-cell"}
+                    onDragOver={(event) => {
+                      if (!editMode) return;
+                      event.preventDefault();
+                    }}
+                    onDrop={(event) => {
+                      if (!editMode) return;
+                      const raw = event.dataTransfer.getData("application/json");
+                      if (!raw) return;
+                      try {
+                        const source = JSON.parse(raw) as { employee: string; day: string };
+                        if (source.employee !== employeeName) return;
+                        if (source.day === dayKey) return;
+                        onSwapDays?.({
+                          employee: employeeName,
+                          sourceDay: source.day,
+                          targetDay: dayKey,
+                        });
+                      } catch {
+                        // Ignore malformed drag payloads.
+                      }
+                    }}
                   >
                     <div
                       style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}
                       draggable={editMode}
                       data-dnd-cell={key}
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData(
+                          "application/json",
+                          JSON.stringify({ employee: employeeName, day: dayKey }),
+                        );
+                        event.dataTransfer.effectAllowed = "move";
+                      }}
                     >
                       <span>{shift}</span>
                       {editMode ? (

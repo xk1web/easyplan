@@ -661,6 +661,67 @@ const SimulatorPanel = () => {
     setEditedCellStatuses((prev) => ({ ...prev, [`${payload.employee}__${payload.day}`]: "working" }));
   };
 
+  const swapEmployeeDays = (payload: { employee: string; sourceDay: string; targetDay: string }) => {
+    if (!isManualEditMode || !generatedPlanning || !editedPlanning) {
+      return;
+    }
+    if (payload.sourceDay === payload.targetDay) {
+      return;
+    }
+
+    setError(null);
+    setEditedPlanning((prev) => {
+      if (!prev) return prev;
+      const employeeSchedule = prev[payload.employee];
+      if (!employeeSchedule) return prev;
+
+      const nextDays = { ...employeeSchedule.days };
+      const source = employeeSchedule.days[payload.sourceDay];
+      const target = employeeSchedule.days[payload.targetDay];
+
+      if (target) {
+        nextDays[payload.sourceDay] = target;
+      } else {
+        delete nextDays[payload.sourceDay];
+      }
+
+      if (source) {
+        nextDays[payload.targetDay] = source;
+      } else {
+        delete nextDays[payload.targetDay];
+      }
+
+      const nextSchedule = {
+        ...employeeSchedule,
+        days: nextDays,
+        total_hours: recomputeTotalHours({ ...employeeSchedule, days: nextDays }),
+      };
+
+      return {
+        ...prev,
+        [payload.employee]: nextSchedule,
+      };
+    });
+    setEditedCellStatuses((prev) => {
+      const next = { ...prev };
+      const sourceKey = `${payload.employee}__${payload.sourceDay}`;
+      const targetKey = `${payload.employee}__${payload.targetDay}`;
+      const sourceStatus = prev[sourceKey];
+      const targetStatus = prev[targetKey];
+      if (targetStatus) {
+        next[sourceKey] = targetStatus;
+      } else {
+        delete next[sourceKey];
+      }
+      if (sourceStatus) {
+        next[targetKey] = sourceStatus;
+      } else {
+        delete next[targetKey];
+      }
+      return next;
+    });
+  };
+
   const resetFromGeneratedPlanning = () => {
     setEditedPlanning(generatedPlanning);
     setEditedCellStatuses({});
@@ -1065,7 +1126,7 @@ const SimulatorPanel = () => {
           </p>
         ) : null}
         {isManualEditMode ? (
-          <p className="hint-text">UX drag & drop prete: cellules rendues draggable (deplacement/resize a brancher ensuite).</p>
+          <p className="hint-text">Mode edition: glissez une case vers un autre jour (meme employe) pour inverser les deux jours.</p>
         ) : null}
         {localWarnings.length > 0 ? (
           <div className="card">
@@ -1086,6 +1147,7 @@ const SimulatorPanel = () => {
           modifiedCells={modifiedCells}
           onCellStatusChange={adjustPlanningCell}
           onCellTimeChange={adjustPlanningTime}
+          onSwapDays={swapEmployeeDays}
         />
       </div>
 
