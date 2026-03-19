@@ -388,7 +388,8 @@ def build_weekly_model(
             emp_idx, day_idx, slot_idx = entry
             model.Add(x[(emp_idx, day_idx, slot_idx)] == 0)
 
-    # HARD: contrat hebdomadaire sur temps effectif (pause invisible deduite si shift > 6h).
+    # HARD: contrat hebdomadaire strict sur temps effectif
+    # (pause invisible deduite si shift > 6h).
     min_slots_for_break = (HIDDEN_BREAK_THRESHOLD_MINUTES // slot_minutes) + 1
     worked_minutes_per_employee: Dict[int, cp_model.IntVar] = {}
     for e in range(num_employees):
@@ -407,7 +408,7 @@ def build_weekly_model(
 
         worked_minutes = model.NewIntVar(0, num_days * num_slots * slot_minutes, f"worked_minutes_{e}")
         model.Add(worked_minutes == sum(effective_minutes_by_day))
-        model.Add(worked_minutes <= contracts_slots[e] * slot_minutes)
+        model.Add(worked_minutes == contracts_slots[e] * slot_minutes)
         worked_minutes_per_employee[e] = worked_minutes
 
     # HARD: minimum staff journalier global (garde-fou metier).
@@ -492,15 +493,6 @@ def build_weekly_model(
             # HARD: opticien present pendant ouverture quand staff requis.
             if require_optician and required_staff > 0:
                 model.Add(sum(x[(e, d, s)] for e in optician_indices) >= 1)
-
-    # SOFT: respect contrat (inciter a atteindre le contrat sans depassement hard).
-    contract_weight = int(soft_weights.get("contract_target", 25))
-    for e in range(num_employees):
-        contract_minutes = contracts_slots[e] * slot_minutes
-        worked_minutes = worked_minutes_per_employee[e]
-        under_contract = model.NewIntVar(0, contract_minutes, f"under_contract_{e}")
-        model.Add(under_contract >= contract_minutes - worked_minutes)
-        soft_penalties.append(under_contract * contract_weight)
 
     # SOFT: equilibrage leger du nombre de jours travailles.
     balance_weight = int(soft_weights.get("light_balance_weight", 1))
