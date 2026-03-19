@@ -95,6 +95,7 @@ class PlanningResponse(BaseModel):
     suggestions: Optional[List[str]] = None
     classification: Optional[str] = None
     explanation: Optional[Dict[str, Any]] = None
+    infeasibility_reasons: Optional[List[Dict[str, Any]]] = None
     overrides_applied: Optional[List[Dict[str, Any]]] = None
     overrides_rejected: Optional[List[Dict[str, Any]]] = None
 
@@ -161,6 +162,7 @@ def _response_from_engine_output(
         suggestions=None,
         classification=None,
         explanation=output.get("explanation"),
+        infeasibility_reasons=output.get("infeasibility_reasons"),
         overrides_applied=overrides_applied,
         overrides_rejected=overrides_rejected,
     )

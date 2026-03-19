@@ -69,6 +69,12 @@ export interface PlanningResponse {
   metrics?: SolverMetrics | null;
   kpi?: GlobalKPI;
   error?: string | null;
+  infeasibility_reasons?: Array<{
+    code: string;
+    title: string;
+    message: string;
+    details?: Record<string, unknown>;
+  }> | null;
   total_overtime_used_hours?: number | null;
   capacity_total_hours?: number | null;
   coverage_total_hours?: number | null;

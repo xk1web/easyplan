@@ -58,11 +58,20 @@ type SimulateResponse = {
 };
 
 type GeneratePlanningResponse = {
+  status?: string;
   schedule?: Record<string, EmployeeSchedule> | null;
   kpi?: Record<string, unknown> | null;
   explanation?: Record<string, unknown> | null;
   error?: string | null;
+  infeasibility_reasons?: Array<{
+    code: string;
+    title: string;
+    message: string;
+    details?: Record<string, unknown>;
+  }> | null;
 };
+
+type InfeasibilityReason = NonNullable<GeneratePlanningResponse["infeasibility_reasons"]>[number];
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -149,6 +158,9 @@ const SimulatorPanel = () => {
   const [explanation, setExplanation] = useState<SimulateResponse["explanation"]>({});
   const [generatedPlanning, setGeneratedPlanning] = useState<Record<string, EmployeeSchedule> | null>(null);
   const [editedPlanning, setEditedPlanning] = useState<Record<string, EmployeeSchedule> | null>(null);
+  const [infeasibilityReasons, setInfeasibilityReasons] = useState<
+    NonNullable<GeneratePlanningResponse["infeasibility_reasons"]>
+  >([]);
   const [isManualEditMode, setIsManualEditMode] = useState(false);
   const [editedCellStatuses, setEditedCellStatuses] = useState<Record<string, "working" | "off" | "unavailable">>({});
   const [constraints, setConstraints] = useState<ManagerConstraint[]>([]);
@@ -186,6 +198,69 @@ const SimulatorPanel = () => {
       : surstaffingHours > 0
         ? "Surstaffing"
         : "Equilibre";
+
+  const reasonDetails = (reason: InfeasibilityReason): string[] => {
+    const details = reason.details ?? {};
+    if (reason.code === "NO_OPTICIAN_AVAILABLE") {
+      const days = Array.isArray(details.days) ? details.days : [];
+      if (days.length > 0) {
+        return [`Jours impactes: ${days.map((day) => DAY_LABELS[String(day)] ?? String(day)).join(", ")}`];
+      }
+    }
+    if (reason.code === "OPEN_DAY_NOT_COVERABLE") {
+      const rows = Array.isArray(details.days) ? details.days : [];
+      return rows.slice(0, 3).map((row) => {
+        const day = String((row as Record<string, unknown>).day ?? "");
+        const required = Number((row as Record<string, unknown>).required ?? 0);
+        const maxAvailable = Number((row as Record<string, unknown>).max_available_assignments ?? 0);
+        return `${DAY_LABELS[day] ?? day}: requis=${required}, max disponible=${maxAvailable}`;
+      });
+    }
+    if (reason.code === "FIXED_OFF_INCOMPATIBLE") {
+      const rows = Array.isArray(details.sample_constraints) ? details.sample_constraints : [];
+      return rows.slice(0, 3).map((row) => {
+        const item = row as Record<string, unknown>;
+        const employee = String(item.employee ?? "");
+        const day = String(item.day ?? "");
+        const type = String(item.type ?? "");
+        const status = String(item.status ?? "");
+        const suffix = status ? ` (${status})` : "";
+        return `${employee} - ${DAY_LABELS[day] ?? day} - ${type}${suffix}`;
+      });
+    }
+    if (reason.code === "INSUFFICIENT_CAPACITY") {
+      const rows = Array.isArray(details.employees_below_contract) ? details.employees_below_contract : [];
+      return rows.slice(0, 3).map((row) => {
+        const item = row as Record<string, unknown>;
+        const employee = String(item.employee ?? "");
+        const contractMinutes = Number(item.contract_minutes ?? 0);
+        const maxPossibleMinutes = Number(item.max_possible_minutes ?? 0);
+        return `${employee}: contrat=${(contractMinutes / 60).toFixed(1)}h, max possible=${(maxPossibleMinutes / 60).toFixed(1)}h`;
+      });
+    }
+    return [];
+  };
+
+  const actionHints = useMemo(() => {
+    const hints: string[] = [];
+    const codes = new Set(infeasibilityReasons.map((reason) => reason.code));
+    if (codes.has("NO_OPTICIAN_AVAILABLE")) {
+      hints.push("Verifier les indisponibilites/off des opticiens sur les jours impactes.");
+    }
+    if (codes.has("OPEN_DAY_NOT_COVERABLE")) {
+      hints.push("Ajuster le minimum journalier, les jours d'ouverture, ou les indisponibilites fixes.");
+    }
+    if (codes.has("FIXED_OFF_INCOMPATIBLE")) {
+      hints.push("Retirer ou assouplir au moins une contrainte OFF/indisponibilite parmi celles listees.");
+    }
+    if (codes.has("INSUFFICIENT_CAPACITY")) {
+      hints.push("Augmenter la capacite contractuelle ou reduire les indisponibilites bloquantes.");
+    }
+    if (hints.length === 0 && infeasibilityReasons.length > 0) {
+      hints.push("Verifier les contraintes manager puis relancer une simulation.");
+    }
+    return hints;
+  }, [infeasibilityReasons]);
 
   useEffect(() => {
     if (employees.length === 0) {
@@ -304,6 +379,7 @@ const SimulatorPanel = () => {
       };
 
       setError(null);
+      setInfeasibilityReasons([]);
       const response = await fetch(buildUrl("/simulate-planning"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -322,12 +398,14 @@ const SimulatorPanel = () => {
       setEditedPlanning(null);
       setEditedCellStatuses({});
       setIsManualEditMode(false);
+      setInfeasibilityReasons([]);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(message);
       setSchedule({});
       setKpi({});
       setExplanation({});
+      setInfeasibilityReasons([]);
     } finally {
       setLoading(false);
     }
@@ -347,6 +425,7 @@ const SimulatorPanel = () => {
     setEditedPlanning(null);
     setEditedCellStatuses({});
     setIsManualEditMode(false);
+    setInfeasibilityReasons([]);
     setConstraints([]);
     setConstraintEmployee(INITIAL_EMPLOYEES[0]?.name ?? "");
     setConstraintDay("monday");
@@ -540,6 +619,15 @@ const SimulatorPanel = () => {
         throw new Error(await parseErrorMessage(response));
       }
       const data = (await response.json()) as GeneratePlanningResponse;
+      if (data.status === "infeasible") {
+        setGeneratedPlanning(null);
+        setEditedPlanning(null);
+        setEditedCellStatuses({});
+        setIsManualEditMode(false);
+        setInfeasibilityReasons(data.infeasibility_reasons ?? []);
+        setError(data.error ?? "Planning infeasible avec les contraintes hard actuelles.");
+        return;
+      }
       if (data.error) {
         throw new Error(data.error);
       }
@@ -548,6 +636,7 @@ const SimulatorPanel = () => {
       setEditedPlanning(nextPlanning);
       setEditedCellStatuses({});
       setIsManualEditMode(false);
+      setInfeasibilityReasons([]);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(`Impossible de regenerer le planning avec les modifications manuelles: ${message}`);
@@ -614,6 +703,15 @@ const SimulatorPanel = () => {
         throw new Error(await parseErrorMessage(response));
       }
       const data = (await response.json()) as GeneratePlanningResponse;
+      if (data.status === "infeasible") {
+        setGeneratedPlanning(null);
+        setEditedPlanning(null);
+        setEditedCellStatuses({});
+        setIsManualEditMode(false);
+        setInfeasibilityReasons(data.infeasibility_reasons ?? []);
+        setError(data.error ?? "Planning infeasible avec les contraintes hard actuelles.");
+        return;
+      }
       if (data.error) {
         throw new Error(data.error);
       }
@@ -622,12 +720,14 @@ const SimulatorPanel = () => {
       setEditedPlanning(nextPlanning);
       setEditedCellStatuses({});
       setIsManualEditMode(false);
+      setInfeasibilityReasons([]);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(message);
       setGeneratedPlanning(null);
       setEditedPlanning(null);
       setEditedCellStatuses({});
+      setInfeasibilityReasons([]);
     } finally {
       setLoadingGenerate(false);
     }
@@ -907,6 +1007,34 @@ const SimulatorPanel = () => {
       </div>
 
       {error ? <p className="alert alert--error">{error}</p> : null}
+      {infeasibilityReasons.length > 0 ? (
+        <div className="card">
+          <h4>Diagnostic infeasibility</h4>
+          <p className="hint-text">Contexte conserve: vos parametres et contraintes restent en place pour correction rapide.</p>
+          <ul className="list-clean">
+            {infeasibilityReasons.map((reason, index) => (
+              <li key={`${reason.code}-${index}`}>
+                <strong>{reason.title}:</strong> {reason.message}
+                {reasonDetails(reason).length > 0 ? (
+                  <div className="hint-text">
+                    {reasonDetails(reason).join(" | ")}
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          {actionHints.length > 0 ? (
+            <>
+              <h4>Actions recommandees</h4>
+              <ul className="list-clean">
+                {actionHints.map((hint, index) => (
+                  <li key={`hint-${index}`}>{hint}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="decision-section">
         <h3>KPI</h3>

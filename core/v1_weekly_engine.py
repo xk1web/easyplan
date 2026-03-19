@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.explanation.planning_explainer import explain_planning
+from core.infeasibility_diagnosis import diagnose_infeasibility
 from core.metrics.kpi_calculator import calculate_kpi
 from metrics.v1_kpi import compute_v1_kpi
 from model.weekly_model import WeeklyModelArtifacts, build_weekly_model
@@ -178,6 +179,15 @@ def run_weekly_v1_engine(
         result["traceability"] = {"x": {}}
         if solve_output.solver_status == "INFEASIBLE":
             result["error"] = "Aucune solution conforme n'a ete trouvee."
+            result["infeasibility_reasons"] = diagnose_infeasibility(
+                employees=employees,
+                roles=roles,
+                contracts=contracts,
+                days=days,
+                config=config,
+                constraints=constraints,
+                unavailabilities=unavailabilities,
+            )
         elif solve_output.solver_status == "UNKNOWN":
             result["error"] = "Timeout solveur: aucune solution garantie dans le temps imparti."
 
