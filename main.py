@@ -49,6 +49,7 @@ class PlanningRequest(BaseModel):
     unavailabilities: Optional[List[List[int]]] = Field(default=[])
     config: Optional[Dict[str, Any]] = Field(default=None)
     previous_month_stats: Optional[PreviousMonthStats] = Field(default=None)
+    manual_overrides: Optional[List[Dict[str, Any]]] = Field(default=None)
 
 
 class SolverMetrics(BaseModel):
@@ -155,6 +156,34 @@ def _response_from_engine_output(output: Dict[str, Any]) -> PlanningResponse:
     )
 
 
+def _merge_manual_overrides(
+    base_constraints: Optional[List[Dict[str, Any]]],
+    manual_overrides: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    constraints = list(base_constraints or [])
+    overrides = manual_overrides or []
+    for override in overrides:
+        employee = override.get("employee")
+        day = override.get("day")
+        status = override.get("new_status")
+        if not employee or not day or status not in ("working", "off", "unavailable"):
+            continue
+        constraints = [
+            c
+            for c in constraints
+            if not (c.get("type") == "day_status" and c.get("employee") == employee and c.get("day") == day)
+        ]
+        constraints.append(
+            {
+                "type": "day_status",
+                "employee": employee,
+                "day": day,
+                "status": status,
+            }
+        )
+    return constraints
+
+
 def _parse_hhmm_to_minutes(value: str) -> int:
     parts = value.split(":")
     if len(parts) != 2:
@@ -253,11 +282,12 @@ def generate_planning(request: PlanningRequest) -> PlanningResponse:
     unavailabilities = [tuple(u) for u in request.unavailabilities] if request.unavailabilities else []
 
     try:
+        merged_constraints = _merge_manual_overrides(request.constraints, request.manual_overrides)
         output = run_weekly_v1_engine(
             employees=request.employees,
             contracts=request.contracts,
             roles=request.roles,
-            constraints=request.constraints,
+            constraints=merged_constraints,
             days=request.days,
             config=config,
             unavailabilities=unavailabilities,
@@ -289,7 +319,7 @@ def adjust_planning(request: AdjustPlanningRequest) -> PlanningResponse:
     employees = list(request.employees)
     contracts = list(request.contracts)
 
-    constraints = list(request.constraints or [])
+    constraints = _merge_manual_overrides(request.constraints, request.manual_overrides)
     if request.employee and request.day and request.new_status:
         constraints.append(
             {

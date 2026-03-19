@@ -9,6 +9,11 @@ export interface PlanningRequest {
   roles: string[];
   days: string[];
   unavailabilities?: number[][];
+  manual_overrides?: Array<{
+    employee: string;
+    day: string;
+    new_status: "working" | "off" | "unavailable";
+  }>;
   config?: Record<string, unknown>;
   previous_month_stats?: PreviousMonthStats;
 }

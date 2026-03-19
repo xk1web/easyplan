@@ -58,6 +58,7 @@ type SimulateResponse = {
 };
 
 type GeneratePlanningResponse = {
+  status?: string;
   schedule?: Record<string, EmployeeSchedule> | null;
   kpi?: Record<string, unknown> | null;
   explanation?: Record<string, unknown> | null;
@@ -132,11 +133,12 @@ const SimulatorPanel = () => {
   const [schedule, setSchedule] = useState<Record<string, EmployeeSchedule>>({});
   const [kpi, setKpi] = useState<Record<string, unknown>>({});
   const [explanation, setExplanation] = useState<SimulateResponse["explanation"]>({});
-  const [generatedSchedule, setGeneratedSchedule] = useState<Record<string, EmployeeSchedule> | null>(null);
+  const [generatedPlanning, setGeneratedPlanning] = useState<Record<string, EmployeeSchedule> | null>(null);
+  const [draftPlanning, setDraftPlanning] = useState<Record<string, EmployeeSchedule> | null>(null);
   const [generatedKpi, setGeneratedKpi] = useState<Record<string, unknown> | null>(null);
   const [generatedExplanation, setGeneratedExplanation] = useState<Record<string, unknown> | null>(null);
-  const [generatedPlanningPayload, setGeneratedPlanningPayload] = useState<Record<string, unknown> | null>(null);
-  const [cellStatuses, setCellStatuses] = useState<Record<string, "working" | "off" | "unavailable">>({});
+  const [draftCellStatuses, setDraftCellStatuses] = useState<Record<string, "working" | "off" | "unavailable">>({});
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [constraints, setConstraints] = useState<ManagerConstraint[]>([]);
   const [constraintEmployee, setConstraintEmployee] = useState(INITIAL_EMPLOYEES[0]?.name ?? "");
   const [constraintDay, setConstraintDay] = useState("monday");
@@ -304,7 +306,10 @@ const SimulatorPanel = () => {
       setSchedule(data.schedule || {});
       setKpi(data.kpi_summary || {});
       setExplanation(data.explanation || {});
-      setGeneratedSchedule(null);
+      setGeneratedPlanning(null);
+      setDraftPlanning(null);
+      setDraftCellStatuses({});
+      setHasUnsavedChanges(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(message);
@@ -326,11 +331,12 @@ const SimulatorPanel = () => {
     setSchedule({});
     setKpi({});
     setExplanation({});
-    setGeneratedSchedule(null);
+    setGeneratedPlanning(null);
+    setDraftPlanning(null);
     setGeneratedKpi(null);
     setGeneratedExplanation(null);
-    setGeneratedPlanningPayload(null);
-    setCellStatuses({});
+    setDraftCellStatuses({});
+    setHasUnsavedChanges(false);
     setConstraints([]);
     setConstraintEmployee(INITIAL_EMPLOYEES[0]?.name ?? "");
     setConstraintDay("monday");
@@ -350,6 +356,60 @@ const SimulatorPanel = () => {
       { type: "day_status" as const, employee: next.employee, day: next.day, status: next.status },
     ];
   };
+
+  const getGeneratedCellStatus = (employee: string, day: string): "working" | "off" => {
+    const dayData = generatedPlanning?.[employee]?.days?.[day];
+    return dayData && dayData.ranges.length > 0 ? "working" : "off";
+  };
+
+  const recomputeTotalHours = (employeeSchedule: EmployeeSchedule): number => (
+    Object.values(employeeSchedule.days).reduce((sum, dayData) => sum + dayData.hours, 0)
+  );
+
+  const applyStatusToDraftPlanning = (
+    currentDraft: Record<string, EmployeeSchedule> | null,
+    payload: { employee: string; day: string; new_status: "working" | "off" | "unavailable" },
+  ): Record<string, EmployeeSchedule> | null => {
+    if (!currentDraft || !currentDraft[payload.employee]) {
+      return currentDraft;
+    }
+    const employeeSchedule = currentDraft[payload.employee];
+    const nextDays = { ...employeeSchedule.days };
+    const existingDay = nextDays[payload.day];
+
+    if (payload.new_status === "off" || payload.new_status === "unavailable") {
+      delete nextDays[payload.day];
+    } else if (!existingDay) {
+      nextDays[payload.day] = { ranges: [], hours: 0 };
+    }
+
+    const nextEmployeeSchedule: EmployeeSchedule = {
+      ...employeeSchedule,
+      days: nextDays,
+      total_hours: recomputeTotalHours({ ...employeeSchedule, days: nextDays }),
+    };
+
+    return {
+      ...currentDraft,
+      [payload.employee]: nextEmployeeSchedule,
+    };
+  };
+
+  const buildManualOverrides = () => (
+    Object.entries(draftCellStatuses)
+      .filter(([key, status]) => {
+        const [employee, day] = key.split("__");
+        return status !== getGeneratedCellStatus(employee, day);
+      })
+      .map(([key, status]) => {
+        const [employee, day] = key.split("__");
+        return {
+          employee,
+          day,
+          new_status: status,
+        };
+      })
+  );
 
   const generatePlanning = async () => {
     setLoadingGenerate(true);
@@ -372,11 +432,15 @@ const SimulatorPanel = () => {
       };
 
       setError(null);
-      setGeneratedPlanningPayload(payload);
+      const manualOverrides = buildManualOverrides();
+      const payloadWithOverrides = {
+        ...payload,
+        manual_overrides: manualOverrides,
+      };
       const response = await fetch(buildUrl("/generate-planning"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(payloadWithOverrides),
       });
       if (!response.ok) {
         throw new Error(await parseErrorMessage(response));
@@ -385,60 +449,53 @@ const SimulatorPanel = () => {
       if (data.error) {
         throw new Error(data.error);
       }
-      setGeneratedSchedule(data.schedule ?? null);
+      const nextPlanning = data.schedule ?? null;
+      setGeneratedPlanning(nextPlanning);
+      setDraftPlanning(nextPlanning);
       setGeneratedKpi(data.kpi ?? null);
       setGeneratedExplanation(data.explanation ?? null);
+      setDraftCellStatuses({});
+      setHasUnsavedChanges(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
-      setError(message);
-      setGeneratedSchedule(null);
-      setGeneratedKpi(null);
-      setGeneratedExplanation(null);
+      setError(`Impossible de regenerer le planning avec les modifications manuelles: ${message}`);
     } finally {
       setLoadingGenerate(false);
     }
   };
 
-  const adjustPlanningCell = async (payload: { employee: string; day: string; new_status: "working" | "off" | "unavailable" }) => {
-    if (!generatedPlanningPayload) {
+  const adjustPlanningCell = (payload: { employee: string; day: string; new_status: "working" | "off" | "unavailable" }) => {
+    if (!generatedPlanning || !draftPlanning) {
       setError("Generez un planning avant de le modifier.");
       return;
     }
-
-    setLoadingGenerate(true);
-    try {
-      const body = { ...generatedPlanningPayload, employee: payload.employee, day: payload.day, new_status: payload.new_status };
-      setError(null);
-      const response = await fetch(buildUrl("/adjust-planning"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+    setError(null);
+    setDraftPlanning((prev) => applyStatusToDraftPlanning(prev, payload));
+    setDraftCellStatuses((prev) => {
+      const next = {
+        ...prev,
+        [`${payload.employee}__${payload.day}`]: payload.new_status,
+      };
+      const hasChanges = Object.entries(next).some(([key, status]) => {
+        const [employee, day] = key.split("__");
+        return status !== getGeneratedCellStatus(employee, day);
       });
-      if (!response.ok) {
-        throw new Error(await parseErrorMessage(response));
-      }
-      const data = (await response.json()) as GeneratePlanningResponse;
-      if (data.error) {
-        throw new Error(data.error);
-      }
+      setHasUnsavedChanges(hasChanges);
+      return next;
+    });
+    const nextConstraints = upsertDayStatusConstraint(constraints, {
+      employee: payload.employee,
+      day: payload.day,
+      status: payload.new_status,
+    });
+    setConstraints(nextConstraints);
+  };
 
-      setGeneratedSchedule(data.schedule ?? null);
-      setGeneratedKpi(data.kpi ?? null);
-      setGeneratedExplanation(data.explanation ?? null);
-
-      setCellStatuses((prev) => ({ ...prev, [`${payload.employee}__${payload.day}`]: payload.new_status }));
-      setConstraints((prev) => upsertDayStatusConstraint(prev, { employee: payload.employee, day: payload.day, status: payload.new_status }));
-      setGeneratedPlanningPayload((prev) => {
-        if (!prev) return prev;
-        const currentConstraints = (prev as { constraints?: ManagerConstraint[] }).constraints ?? [];
-        return { ...(prev as object), constraints: upsertDayStatusConstraint(currentConstraints, { employee: payload.employee, day: payload.day, status: payload.new_status }) };
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      setError(message);
-    } finally {
-      setLoadingGenerate(false);
-    }
+  const cancelManualChanges = () => {
+    setDraftPlanning(generatedPlanning);
+    setDraftCellStatuses({});
+    setHasUnsavedChanges(false);
+    setError(null);
   };
 
   const loadDemoStore = async () => {
@@ -478,15 +535,18 @@ const SimulatorPanel = () => {
       if (data.error) {
         throw new Error(data.error);
       }
-      setGeneratedSchedule(data.schedule ?? null);
+      const nextPlanning = data.schedule ?? null;
+      setGeneratedPlanning(nextPlanning);
+      setDraftPlanning(nextPlanning);
       setGeneratedKpi(data.kpi ?? null);
       setGeneratedExplanation(data.explanation ?? null);
-      setGeneratedPlanningPayload(payload);
-      setCellStatuses({});
+      setDraftCellStatuses({});
+      setHasUnsavedChanges(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(message);
-      setGeneratedSchedule(null);
+      setGeneratedPlanning(null);
+      setDraftPlanning(null);
       setGeneratedKpi(null);
       setGeneratedExplanation(null);
     } finally {
@@ -735,7 +795,17 @@ const SimulatorPanel = () => {
               onClick={generatePlanning}
               disabled={loadingGenerate || loading || !canGeneratePlanning}
             >
-              {loadingGenerate ? "Generation..." : "Generer le planning"}
+              {loadingGenerate ? "Generation..." : hasUnsavedChanges ? "Appliquer et regenerer" : "Generer le planning"}
+            </button>
+          ) : null}
+          {generatedPlanning ? (
+            <button
+              type="button"
+              className="button--ghost"
+              onClick={cancelManualChanges}
+              disabled={loadingGenerate || loading || !hasUnsavedChanges}
+            >
+              Annuler les changements
             </button>
           ) : null}
           <button type="button" className="button--ghost" onClick={loadDemoStore} disabled={loadingGenerate || loading}>
@@ -772,9 +842,22 @@ const SimulatorPanel = () => {
 
       <div className="decision-section">
         <h3>Planning</h3>
+        {generatedPlanning ? (
+          <p className={hasUnsavedChanges ? "alert alert--warning" : "hint-text"}>
+            {hasUnsavedChanges
+              ? "Brouillon modifie: cliquez sur \"Appliquer et regenerer\" pour lancer le backend."
+              : "Aucun changement local en attente."}
+          </p>
+        ) : null}
         <PlanningGrid
-          schedule={generatedSchedule ?? schedule}
-          cellStatuses={cellStatuses}
+          schedule={draftPlanning ?? generatedPlanning ?? schedule}
+          cellStatuses={draftCellStatuses}
+          modifiedCells={Object.fromEntries(
+            Object.entries(draftCellStatuses).filter(([key, status]) => {
+              const [employee, day] = key.split("__");
+              return status !== getGeneratedCellStatus(employee, day);
+            }).map(([key]) => [key, true]),
+          )}
           onCellStatusChange={adjustPlanningCell}
         />
       </div>

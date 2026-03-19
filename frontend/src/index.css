@@ -458,6 +458,15 @@ label {
   margin-top: 10px;
 }
 
+.planning-cell {
+  transition: background-color 130ms ease;
+}
+
+.planning-cell--modified {
+  background: #fff4cc !important;
+  box-shadow: inset 0 0 0 1px #f2c94c;
+}
+
 .working {
   background-color: #fff7cc;
 }

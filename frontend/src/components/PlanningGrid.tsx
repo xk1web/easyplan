@@ -21,6 +21,7 @@ type PlanningGridProps = {
     new_status: "working" | "off" | "unavailable";
   }) => void;
   cellStatuses?: Record<string, "working" | "off" | "unavailable">;
+  modifiedCells?: Record<string, boolean>;
 };
 
 const DAY_LABELS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"] as const;
@@ -47,7 +48,7 @@ const resolveDayKeys = (schedule: Record<string, EmployeeSchedule>) => {
   return fallback;
 };
 
-const PlanningGrid = ({ schedule, onCellStatusChange, cellStatuses }: PlanningGridProps) => {
+const PlanningGrid = ({ schedule, onCellStatusChange, cellStatuses, modifiedCells }: PlanningGridProps) => {
   if (!schedule || Object.keys(schedule).length === 0) {
     return <p className="empty-state">Aucun planning disponible pour le moment.</p>;
   }
@@ -73,14 +74,22 @@ const PlanningGrid = ({ schedule, onCellStatusChange, cellStatuses }: PlanningGr
               {dayKeys.map((dayKey, index) => {
                 const dayData = employeeSchedule.days[dayKey];
                 const isWorking = Boolean(dayData && dayData.ranges.length > 0);
-                const shift = isWorking
-                  ? dayData!.ranges.map((range) => `${range.start}-${range.end}`).join(", ")
-                  : "OFF";
                 const key = `${employeeName}__${dayKey}`;
                 const currentStatus = cellStatuses?.[key] ?? (isWorking ? "working" : "off");
+                const shift = currentStatus === "off"
+                  ? "OFF"
+                  : currentStatus === "unavailable"
+                    ? "INDISPO"
+                    : isWorking
+                      ? dayData!.ranges.map((range) => `${range.start}-${range.end}`).join(", ")
+                      : "WORKING (manuel)";
+                const isModified = Boolean(modifiedCells?.[key]);
 
                 return (
-                  <td key={`${employeeName}-${DAY_LABELS[index]}`}>
+                  <td
+                    key={`${employeeName}-${DAY_LABELS[index]}`}
+                    className={isModified ? "planning-cell planning-cell--modified" : "planning-cell"}
+                  >
                     <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                       <span>{shift}</span>
                       <select
