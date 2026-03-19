@@ -620,10 +620,8 @@ const SimulatorPanel = () => {
       }
       const data = (await response.json()) as GeneratePlanningResponse;
       if (data.status === "infeasible") {
-        setGeneratedPlanning(null);
-        setEditedPlanning(null);
-        setEditedCellStatuses({});
-        setIsManualEditMode(false);
+        // Keep current local planning context so manual editing stays available.
+        setIsManualEditMode(Boolean(editedPlanning ?? generatedPlanning));
         setInfeasibilityReasons(data.infeasibility_reasons ?? []);
         setError(data.error ?? "Planning infeasible avec les contraintes hard actuelles.");
         return;
