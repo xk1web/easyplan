@@ -58,22 +58,10 @@ type SimulateResponse = {
 };
 
 type GeneratePlanningResponse = {
-  status?: string;
   schedule?: Record<string, EmployeeSchedule> | null;
   kpi?: Record<string, unknown> | null;
   explanation?: Record<string, unknown> | null;
   error?: string | null;
-  overrides_applied?: Array<{
-    employee: string;
-    day: string;
-    new_status: "working" | "off" | "unavailable";
-  }> | null;
-  overrides_rejected?: Array<{
-    employee: string;
-    day: string;
-    new_status: "working" | "off" | "unavailable";
-    reason?: string;
-  }> | null;
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
@@ -110,6 +98,8 @@ const DAY_LABELS: Record<string, string> = {
   saturday: "Samedi",
   sunday: "Dimanche",
 };
+const HIDDEN_BREAK_THRESHOLD_MINUTES = 6 * 60;
+const HIDDEN_BREAK_MINUTES = 60;
 
 const getNumber = (source: Record<string, unknown> | null | undefined, keys: string[]) => {
   if (!source) {
@@ -132,6 +122,19 @@ const hhmmToMinutes = (value: string) => {
   return (hours * 60) + minutes;
 };
 
+const effectiveWorkedHoursFromRanges = (ranges: TimeRange[]): number => {
+  const totalPresenceMinutes = ranges.reduce((sum, range) => {
+    const start = hhmmToMinutes(range.start);
+    const end = hhmmToMinutes(range.end);
+    if (end <= start) return sum;
+    return sum + (end - start);
+  }, 0);
+  const effectiveMinutes = totalPresenceMinutes > HIDDEN_BREAK_THRESHOLD_MINUTES
+    ? totalPresenceMinutes - HIDDEN_BREAK_MINUTES
+    : totalPresenceMinutes;
+  return Math.max(0, effectiveMinutes / 60);
+};
+
 const SimulatorPanel = () => {
   const [employees, setEmployees] = useState<EmployeeEntry[]>(INITIAL_EMPLOYEES);
   const [minStaff, setMinStaff] = useState<number>(INITIAL_MIN_STAFF);
@@ -145,15 +148,9 @@ const SimulatorPanel = () => {
   const [kpi, setKpi] = useState<Record<string, unknown>>({});
   const [explanation, setExplanation] = useState<SimulateResponse["explanation"]>({});
   const [generatedPlanning, setGeneratedPlanning] = useState<Record<string, EmployeeSchedule> | null>(null);
-  const [draftPlanning, setDraftPlanning] = useState<Record<string, EmployeeSchedule> | null>(null);
-  const [generatedKpi, setGeneratedKpi] = useState<Record<string, unknown> | null>(null);
-  const [generatedExplanation, setGeneratedExplanation] = useState<Record<string, unknown> | null>(null);
-  const [draftCellStatuses, setDraftCellStatuses] = useState<Record<string, "working" | "off" | "unavailable">>({});
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  const [overrideResult, setOverrideResult] = useState<{
-    applied: Array<{ employee: string; day: string; new_status: "working" | "off" | "unavailable" }>;
-    rejected: Array<{ employee: string; day: string; new_status: "working" | "off" | "unavailable"; reason?: string }>;
-  }>({ applied: [], rejected: [] });
+  const [editedPlanning, setEditedPlanning] = useState<Record<string, EmployeeSchedule> | null>(null);
+  const [isManualEditMode, setIsManualEditMode] = useState(false);
+  const [editedCellStatuses, setEditedCellStatuses] = useState<Record<string, "working" | "off" | "unavailable">>({});
   const [constraints, setConstraints] = useState<ManagerConstraint[]>([]);
   const [constraintEmployee, setConstraintEmployee] = useState(INITIAL_EMPLOYEES[0]?.name ?? "");
   const [constraintDay, setConstraintDay] = useState("monday");
@@ -322,10 +319,9 @@ const SimulatorPanel = () => {
       setKpi(data.kpi_summary || {});
       setExplanation(data.explanation || {});
       setGeneratedPlanning(null);
-      setDraftPlanning(null);
-      setDraftCellStatuses({});
-      setHasUnsavedChanges(false);
-      setOverrideResult({ applied: [], rejected: [] });
+      setEditedPlanning(null);
+      setEditedCellStatuses({});
+      setIsManualEditMode(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(message);
@@ -348,12 +344,9 @@ const SimulatorPanel = () => {
     setKpi({});
     setExplanation({});
     setGeneratedPlanning(null);
-    setDraftPlanning(null);
-    setGeneratedKpi(null);
-    setGeneratedExplanation(null);
-    setDraftCellStatuses({});
-    setHasUnsavedChanges(false);
-    setOverrideResult({ applied: [], rejected: [] });
+    setEditedPlanning(null);
+    setEditedCellStatuses({});
+    setIsManualEditMode(false);
     setConstraints([]);
     setConstraintEmployee(INITIAL_EMPLOYEES[0]?.name ?? "");
     setConstraintDay("monday");
@@ -361,29 +354,108 @@ const SimulatorPanel = () => {
     setConstraintExtraStaff(1);
   };
 
-  const upsertDayStatusConstraint = (
-    current: ManagerConstraint[],
-    next: { employee: string; day: string; status: "working" | "off" | "unavailable" },
-  ): ManagerConstraint[] => {
-    const withoutSame = current.filter(
-      (c) => !(c.type === "day_status" && c.employee === next.employee && c.day === next.day),
-    );
-    return [
-      ...withoutSame,
-      { type: "day_status" as const, employee: next.employee, day: next.day, status: next.status },
-    ];
-  };
+  const activePlanning = editedPlanning ?? generatedPlanning ?? schedule;
 
-  const getGeneratedCellStatus = (employee: string, day: string): "working" | "off" => {
-    const dayData = generatedPlanning?.[employee]?.days?.[day];
+  const dayKeys = useMemo(() => {
+    const keys = new Set<string>();
+    Object.values(activePlanning).forEach((employeeSchedule) => {
+      Object.keys(employeeSchedule.days).forEach((dayKey) => keys.add(dayKey));
+    });
+    if (keys.size === 0) {
+      return ["J0", "J1", "J2", "J3", "J4", "J5", "J6"];
+    }
+    const ordered = Array.from(keys).sort((a, b) => a.localeCompare(b));
+    while (ordered.length < 7) {
+      ordered.push(`J${ordered.length}`);
+    }
+    return ordered.slice(0, 7);
+  }, [activePlanning]);
+
+  const getCellStatus = (
+    planning: Record<string, EmployeeSchedule> | null | undefined,
+    employee: string,
+    day: string,
+  ): "working" | "off" => {
+    if (!planning) return "off";
+    const dayData = planning[employee]?.days?.[day];
     return dayData && dayData.ranges.length > 0 ? "working" : "off";
   };
+
+  const modifiedCells = useMemo(() => {
+    if (!generatedPlanning || !editedPlanning) return {};
+    const changed: Record<string, boolean> = {};
+    for (const employee of Object.keys(generatedPlanning)) {
+      for (const day of dayKeys) {
+        const generatedDay = generatedPlanning[employee]?.days?.[day];
+        const editedDay = editedPlanning[employee]?.days?.[day];
+        const generatedStatus = generatedDay && generatedDay.ranges.length > 0 ? "working" : "off";
+        const editedStatus = editedDay && editedDay.ranges.length > 0 ? "working" : "off";
+        const generatedRange = generatedDay?.ranges?.[0];
+        const editedRange = editedDay?.ranges?.[0];
+        const hasTimeDiff = (generatedRange?.start ?? "") !== (editedRange?.start ?? "")
+          || (generatedRange?.end ?? "") !== (editedRange?.end ?? "");
+        if (generatedStatus !== editedStatus || hasTimeDiff) {
+          changed[`${employee}__${day}`] = true;
+        }
+      }
+    }
+    return changed;
+  }, [dayKeys, editedPlanning, generatedPlanning]);
+
+  const localWarnings = useMemo(() => {
+    if (!generatedPlanning || !editedPlanning) return [] as string[];
+    const warnings: string[] = [];
+    const contractByEmployee = Object.fromEntries(employees.map((employee) => [employee.name, employee.contract]));
+    const roleByEmployee = Object.fromEntries(employees.map((employee) => [employee.name, employee.role]));
+
+    for (const [employeeName, employeeSchedule] of Object.entries(editedPlanning)) {
+      const contract = Number(contractByEmployee[employeeName] ?? 0);
+      if (employeeSchedule.total_hours > contract + 1e-6) {
+        warnings.push(`${employeeName}: contrat depasse (${employeeSchedule.total_hours.toFixed(1)}h > ${contract.toFixed(1)}h).`);
+      }
+    }
+
+    for (const [employeeName, employeeSchedule] of Object.entries(editedPlanning)) {
+      for (let i = 0; i < dayKeys.length - 1; i += 1) {
+        const currentDay = employeeSchedule.days[dayKeys[i]];
+        const nextDay = employeeSchedule.days[dayKeys[i + 1]];
+        if (!currentDay?.ranges?.length || !nextDay?.ranges?.length) continue;
+        const endCurrent = hhmmToMinutes(currentDay.ranges[currentDay.ranges.length - 1].end);
+        const startNext = hhmmToMinutes(nextDay.ranges[0].start);
+        const restMinutes = (24 * 60 - endCurrent) + startNext;
+        if (restMinutes < 11 * 60) {
+          warnings.push(`${employeeName}: repos < 11h entre ${dayKeys[i]} et ${dayKeys[i + 1]}.`);
+        }
+      }
+    }
+
+    for (const day of dayKeys) {
+      let workingCount = 0;
+      let opticianCount = 0;
+      for (const [employeeName, employeeSchedule] of Object.entries(editedPlanning)) {
+        const isWorking = Boolean(employeeSchedule.days[day]?.ranges?.length);
+        if (!isWorking) continue;
+        workingCount += 1;
+        if (roleByEmployee[employeeName] === "opticien") {
+          opticianCount += 1;
+        }
+      }
+      if (workingCount < minStaff) {
+        warnings.push(`${day}: sous-couverture (${workingCount}/${minStaff}).`);
+      }
+      if (workingCount > 0 && opticianCount === 0) {
+        warnings.push(`${day}: absence d'opticien diplome.`);
+      }
+    }
+
+    return warnings;
+  }, [dayKeys, editedPlanning, employees, generatedPlanning, minStaff]);
 
   const recomputeTotalHours = (employeeSchedule: EmployeeSchedule): number => (
     Object.values(employeeSchedule.days).reduce((sum, dayData) => sum + dayData.hours, 0)
   );
 
-  const applyStatusToDraftPlanning = (
+  const applyStatusToEditedPlanning = (
     currentDraft: Record<string, EmployeeSchedule> | null,
     payload: { employee: string; day: string; new_status: "working" | "off" | "unavailable" },
   ): Record<string, EmployeeSchedule> | null => {
@@ -397,7 +469,7 @@ const SimulatorPanel = () => {
     if (payload.new_status === "off" || payload.new_status === "unavailable") {
       delete nextDays[payload.day];
     } else if (!existingDay) {
-      nextDays[payload.day] = { ranges: [], hours: 0 };
+      nextDays[payload.day] = { ranges: [{ start: openingOpen, end: openingClose }], hours: effectiveWorkedHoursFromRanges([{ start: openingOpen, end: openingClose }]) };
     }
 
     const nextEmployeeSchedule: EmployeeSchedule = {
@@ -412,21 +484,31 @@ const SimulatorPanel = () => {
     };
   };
 
-  const buildManualOverrides = () => (
-    Object.entries(draftCellStatuses)
-      .filter(([key, status]) => {
-        const [employee, day] = key.split("__");
-        return status !== getGeneratedCellStatus(employee, day);
-      })
-      .map(([key, status]) => {
-        const [employee, day] = key.split("__");
-        return {
-          employee,
-          day,
-          new_status: status,
-        };
-      })
-  );
+  const applyTimeToEditedPlanning = (
+    currentDraft: Record<string, EmployeeSchedule> | null,
+    payload: { employee: string; day: string; start: string; end: string },
+  ): Record<string, EmployeeSchedule> | null => {
+    if (!currentDraft || !currentDraft[payload.employee]) return currentDraft;
+    const startMinutes = hhmmToMinutes(payload.start);
+    const endMinutes = hhmmToMinutes(payload.end);
+    if (endMinutes <= startMinutes) return currentDraft;
+
+    const employeeSchedule = currentDraft[payload.employee];
+    const nextDays = { ...employeeSchedule.days };
+    nextDays[payload.day] = {
+      ranges: [{ start: payload.start, end: payload.end }],
+      hours: effectiveWorkedHoursFromRanges([{ start: payload.start, end: payload.end }]),
+    };
+
+    return {
+      ...currentDraft,
+      [payload.employee]: {
+        ...employeeSchedule,
+        days: nextDays,
+        total_hours: recomputeTotalHours({ ...employeeSchedule, days: nextDays }),
+      },
+    };
+  };
 
   const generatePlanning = async () => {
     setLoadingGenerate(true);
@@ -449,16 +531,10 @@ const SimulatorPanel = () => {
       };
 
       setError(null);
-      const manualOverrides = buildManualOverrides();
-      const payloadWithOverrides = {
-        ...payload,
-        manual_overrides: manualOverrides,
-        manual_override_mode: "soft",
-      };
       const response = await fetch(buildUrl("/generate-planning"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payloadWithOverrides),
+        body: JSON.stringify(payload),
       });
       if (!response.ok) {
         throw new Error(await parseErrorMessage(response));
@@ -469,15 +545,9 @@ const SimulatorPanel = () => {
       }
       const nextPlanning = data.schedule ?? null;
       setGeneratedPlanning(nextPlanning);
-      setDraftPlanning(nextPlanning);
-      setGeneratedKpi(data.kpi ?? null);
-      setGeneratedExplanation(data.explanation ?? null);
-      setOverrideResult({
-        applied: data.overrides_applied ?? [],
-        rejected: data.overrides_rejected ?? [],
-      });
-      setDraftCellStatuses({});
-      setHasUnsavedChanges(false);
+      setEditedPlanning(nextPlanning);
+      setEditedCellStatuses({});
+      setIsManualEditMode(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(`Impossible de regenerer le planning avec les modifications manuelles: ${message}`);
@@ -487,37 +557,27 @@ const SimulatorPanel = () => {
   };
 
   const adjustPlanningCell = (payload: { employee: string; day: string; new_status: "working" | "off" | "unavailable" }) => {
-    if (!generatedPlanning || !draftPlanning) {
+    if (!isManualEditMode || !generatedPlanning || !editedPlanning) {
       setError("Generez un planning avant de le modifier.");
       return;
     }
     setError(null);
-    setDraftPlanning((prev) => applyStatusToDraftPlanning(prev, payload));
-    setDraftCellStatuses((prev) => {
-      const next = {
-        ...prev,
-        [`${payload.employee}__${payload.day}`]: payload.new_status,
-      };
-      const hasChanges = Object.entries(next).some(([key, status]) => {
-        const [employee, day] = key.split("__");
-        return status !== getGeneratedCellStatus(employee, day);
-      });
-      setHasUnsavedChanges(hasChanges);
-      return next;
-    });
-    const nextConstraints = upsertDayStatusConstraint(constraints, {
-      employee: payload.employee,
-      day: payload.day,
-      status: payload.new_status,
-    });
-    setConstraints(nextConstraints);
+    setEditedPlanning((prev) => applyStatusToEditedPlanning(prev, payload));
+    setEditedCellStatuses((prev) => ({ ...prev, [`${payload.employee}__${payload.day}`]: payload.new_status }));
   };
 
-  const cancelManualChanges = () => {
-      setDraftPlanning(generatedPlanning);
-      setDraftCellStatuses({});
-      setHasUnsavedChanges(false);
-      setError(null);
+  const adjustPlanningTime = (payload: { employee: string; day: string; start: string; end: string }) => {
+    if (!isManualEditMode || !generatedPlanning || !editedPlanning) {
+      return;
+    }
+    setEditedPlanning((prev) => applyTimeToEditedPlanning(prev, payload));
+    setEditedCellStatuses((prev) => ({ ...prev, [`${payload.employee}__${payload.day}`]: "working" }));
+  };
+
+  const resetFromGeneratedPlanning = () => {
+    setEditedPlanning(generatedPlanning);
+    setEditedCellStatuses({});
+    setError(null);
   };
 
   const loadDemoStore = async () => {
@@ -559,20 +619,15 @@ const SimulatorPanel = () => {
       }
       const nextPlanning = data.schedule ?? null;
       setGeneratedPlanning(nextPlanning);
-      setDraftPlanning(nextPlanning);
-      setGeneratedKpi(data.kpi ?? null);
-      setGeneratedExplanation(data.explanation ?? null);
-      setOverrideResult({ applied: [], rejected: [] });
-      setDraftCellStatuses({});
-      setHasUnsavedChanges(false);
+      setEditedPlanning(nextPlanning);
+      setEditedCellStatuses({});
+      setIsManualEditMode(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(message);
       setGeneratedPlanning(null);
-      setDraftPlanning(null);
-      setGeneratedKpi(null);
-      setGeneratedExplanation(null);
-      setOverrideResult({ applied: [], rejected: [] });
+      setEditedPlanning(null);
+      setEditedCellStatuses({});
     } finally {
       setLoadingGenerate(false);
     }
@@ -819,17 +874,27 @@ const SimulatorPanel = () => {
               onClick={generatePlanning}
               disabled={loadingGenerate || loading || !canGeneratePlanning}
             >
-              {loadingGenerate ? "Generation..." : hasUnsavedChanges ? "Appliquer et regenerer" : "Generer le planning"}
+              {loadingGenerate ? "Generation..." : "Generer"}
             </button>
           ) : null}
           {generatedPlanning ? (
             <button
               type="button"
               className="button--ghost"
-              onClick={cancelManualChanges}
-              disabled={loadingGenerate || loading || !hasUnsavedChanges}
+              onClick={() => setIsManualEditMode((prev) => !prev)}
+              disabled={loadingGenerate || loading}
             >
-              Annuler les changements
+              {isManualEditMode ? "Quitter mode edition" : "Mode edition"}
+            </button>
+          ) : null}
+          {generatedPlanning ? (
+            <button
+              type="button"
+              className="button--ghost"
+              onClick={resetFromGeneratedPlanning}
+              disabled={loadingGenerate || loading}
+            >
+              Reinitialiser depuis planning genere
             </button>
           ) : null}
           <button type="button" className="button--ghost" onClick={loadDemoStore} disabled={loadingGenerate || loading}>
@@ -866,45 +931,35 @@ const SimulatorPanel = () => {
 
       <div className="decision-section">
         <h3>Planning</h3>
-        {generatedPlanning && (overrideResult.applied.length > 0 || overrideResult.rejected.length > 0) ? (
-          <div className="card">
-            <p style={{ margin: 0 }}>
-              Changements manuels respectes: <strong>{overrideResult.applied.length}</strong> - refuses:{" "}
-              <strong>{overrideResult.rejected.length}</strong>
-            </p>
-            {overrideResult.rejected.length > 0 ? (
-              <>
-                <p className="alert alert--warning" style={{ marginTop: "10px" }}>
-                  Certains changements n'etaient pas compatibles avec les contraintes legales ou de couverture.
-                </p>
-                <ul className="list-clean">
-                  {overrideResult.rejected.map((item, index) => (
-                    <li key={`override-rejected-${index}`}>
-                      {item.employee} {item.day} ({item.new_status}) - {item.reason ?? "Contrainte hard"}
-                    </li>
-                  ))}
-                </ul>
-              </>
-            ) : null}
-          </div>
-        ) : null}
         {generatedPlanning ? (
-          <p className={hasUnsavedChanges ? "alert alert--warning" : "hint-text"}>
-            {hasUnsavedChanges
-              ? "Brouillon modifie: cliquez sur \"Appliquer et regenerer\" pour lancer le backend."
-              : "Aucun changement local en attente."}
+          <p className={isManualEditMode ? "alert alert--warning" : "hint-text"}>
+            {isManualEditMode
+              ? "Mode edition active: toutes les modifications sont locales (aucun appel backend)."
+              : "Passez en mode edition pour modifier OFF/WORKING et horaires."}
           </p>
         ) : null}
+        {isManualEditMode ? (
+          <p className="hint-text">UX drag & drop prete: cellules rendues draggable (deplacement/resize a brancher ensuite).</p>
+        ) : null}
+        {localWarnings.length > 0 ? (
+          <div className="card">
+            <p className="alert alert--warning">
+              Warnings locaux ({localWarnings.length}) : certaines modifications ne respectent pas les regles metier.
+            </p>
+            <ul className="list-clean">
+              {localWarnings.map((warning, index) => (
+                <li key={`local-warning-${index}`}>{warning}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <PlanningGrid
-          schedule={draftPlanning ?? generatedPlanning ?? schedule}
-          cellStatuses={draftCellStatuses}
-          modifiedCells={Object.fromEntries(
-            Object.entries(draftCellStatuses).filter(([key, status]) => {
-              const [employee, day] = key.split("__");
-              return status !== getGeneratedCellStatus(employee, day);
-            }).map(([key]) => [key, true]),
-          )}
+          schedule={activePlanning}
+          editMode={isManualEditMode}
+          cellStatuses={editedCellStatuses}
+          modifiedCells={modifiedCells}
           onCellStatusChange={adjustPlanningCell}
+          onCellTimeChange={adjustPlanningTime}
         />
       </div>
 
