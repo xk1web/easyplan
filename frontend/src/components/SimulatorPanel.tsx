@@ -109,6 +109,7 @@ const DAY_LABELS: Record<string, string> = {
 };
 const HIDDEN_BREAK_THRESHOLD_MINUTES = 6 * 60;
 const HIDDEN_BREAK_MINUTES = 60;
+const LOCAL_DRAFT_STORAGE_KEY = "easyplan_manual_draft_v1";
 
 const getNumber = (source: Record<string, unknown> | null | undefined, keys: string[]) => {
   if (!source) {
@@ -144,6 +145,13 @@ const effectiveWorkedHoursFromRanges = (ranges: TimeRange[]): number => {
   return Math.max(0, effectiveMinutes / 60);
 };
 
+const recomputeEmployeeTotalHours = (employeeSchedule: EmployeeSchedule): number => (
+  Object.values(employeeSchedule.days).reduce((sum, dayData) => {
+    if (!dayData?.ranges?.length) return sum;
+    return sum + effectiveWorkedHoursFromRanges(dayData.ranges);
+  }, 0)
+);
+
 const SimulatorPanel = () => {
   const [employees, setEmployees] = useState<EmployeeEntry[]>(INITIAL_EMPLOYEES);
   const [minStaff, setMinStaff] = useState<number>(INITIAL_MIN_STAFF);
@@ -168,14 +176,16 @@ const SimulatorPanel = () => {
   const [constraintDay, setConstraintDay] = useState("monday");
   const [constraintType, setConstraintType] = useState<"unavailability" | "prefer_morning" | "avoid_closing" | "extra_staff_day">("unavailability");
   const [constraintExtraStaff, setConstraintExtraStaff] = useState(1);
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
+  const [localSaveState, setLocalSaveState] = useState<"idle" | "dirty" | "saved">("idle");
 
   const tensionRate = getNumber(kpi, ["tension_rate", "taux_tension_percent"]);
   const totalContractHours = getNumber(kpi, ["total_contract_hours", "total_heures_contractuelles"]);
   const totalRequiredHours = getNumber(kpi, ["total_required_hours", "total_heures_requises_couverture"]);
   const hasKpiSummary = Object.keys(kpi).length > 0;
-  const planningImpossible = totalContractHours < totalRequiredHours;
-  const surstaffingHours = Math.max(0, totalContractHours - totalRequiredHours);
-  const canGeneratePlanning = hasKpiSummary && !planningImpossible;
+  const planningImpossibleFromSimulation = totalContractHours < totalRequiredHours;
+  const surstaffingHoursFromSimulation = Math.max(0, totalContractHours - totalRequiredHours);
+  const canGeneratePlanning = hasKpiSummary && !planningImpossibleFromSimulation;
   const explanationConstraints = explanation?.constraints ?? [];
   const closedWeekdayIndices = useMemo(
     () =>
@@ -193,9 +203,9 @@ const SimulatorPanel = () => {
   );
   const simulationStatus = !hasKpiSummary
     ? "Aucune simulation"
-    : planningImpossible
+    : planningImpossibleFromSimulation
       ? "Sous-effectif"
-      : surstaffingHours > 0
+      : surstaffingHoursFromSimulation > 0
         ? "Surstaffing"
         : "Equilibre";
 
@@ -379,6 +389,8 @@ const SimulatorPanel = () => {
       };
 
       setError(null);
+      setSaveNotice(null);
+      setLocalSaveState("idle");
       setInfeasibilityReasons([]);
       const response = await fetch(buildUrl("/simulate-planning"), {
         method: "POST",
@@ -406,6 +418,8 @@ const SimulatorPanel = () => {
       setKpi({});
       setExplanation({});
       setInfeasibilityReasons([]);
+      setSaveNotice(null);
+      setLocalSaveState("idle");
     } finally {
       setLoading(false);
     }
@@ -426,6 +440,8 @@ const SimulatorPanel = () => {
     setEditedCellStatuses({});
     setIsManualEditMode(false);
     setInfeasibilityReasons([]);
+    setSaveNotice(null);
+    setLocalSaveState("idle");
     setConstraints([]);
     setConstraintEmployee(INITIAL_EMPLOYEES[0]?.name ?? "");
     setConstraintDay("monday");
@@ -434,6 +450,37 @@ const SimulatorPanel = () => {
   };
 
   const activePlanning = editedPlanning ?? generatedPlanning ?? schedule;
+  const openingDurationHours = Math.max(0, (hhmmToMinutes(openingClose) - hhmmToMinutes(openingOpen)) / 60);
+  const localKpiSummary = useMemo(() => {
+    if (!activePlanning || Object.keys(activePlanning).length === 0) return null;
+
+    const totalPlannedHours = Object.values(activePlanning).reduce(
+      (sum, employeeSchedule) => sum + recomputeEmployeeTotalHours(employeeSchedule),
+      0,
+    );
+    const totalContractHoursLocal = employees.reduce((sum, employee) => sum + Math.max(0, employee.contract || 0), 0);
+    const totalRequiredHoursLocal = DAYS.reduce((sum, day) => {
+      if (!openingDays.includes(day)) return sum;
+      return sum + (minStaff * openingDurationHours);
+    }, 0);
+    const undercoverage = Math.max(0, totalRequiredHoursLocal - totalPlannedHours);
+    const surstaffing = Math.max(0, totalPlannedHours - totalRequiredHoursLocal);
+    const tension = totalContractHoursLocal > 0 ? totalRequiredHoursLocal / totalContractHoursLocal : 0;
+
+    return {
+      total_contract_hours: totalContractHoursLocal,
+      total_required_hours: totalRequiredHoursLocal,
+      total_planned_hours: totalPlannedHours,
+      undercoverage_hours: undercoverage,
+      surstaffing_hours: surstaffing,
+      tension_rate: tension,
+    };
+  }, [activePlanning, employees, minStaff, openingDays, openingDurationHours]);
+  const displayedKpi = isManualEditMode ? (localKpiSummary ?? kpi) : kpi;
+  const displayedTotalContractHours = getNumber(displayedKpi, ["total_contract_hours", "total_heures_contractuelles"]);
+  const displayedTotalRequiredHours = getNumber(displayedKpi, ["total_required_hours", "total_heures_requises_couverture"]);
+  const planningImpossible = displayedTotalContractHours < displayedTotalRequiredHours;
+  const surstaffingHours = Math.max(0, displayedTotalContractHours - displayedTotalRequiredHours);
 
   const dayKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -480,6 +527,20 @@ const SimulatorPanel = () => {
     }
     return changed;
   }, [dayKeys, editedPlanning, generatedPlanning]);
+  const localModifiedCount = useMemo(
+    () => Object.keys(modifiedCells).length,
+    [modifiedCells],
+  );
+  const editingSourceLabel = !generatedPlanning
+    ? "Aucun planning genere"
+    : localModifiedCount > 0
+      ? "Planning modifie localement"
+      : "Planning genere (inchangé)";
+  const localSaveLabel = localSaveState === "saved"
+    ? "Sauvegarde locale: OK"
+    : localSaveState === "dirty"
+      ? "Sauvegarde locale: en attente"
+      : "Sauvegarde locale: non demarree";
 
   const localWarnings = useMemo(() => {
     if (!generatedPlanning || !editedPlanning) return [] as string[];
@@ -491,6 +552,23 @@ const SimulatorPanel = () => {
       const contract = Number(contractByEmployee[employeeName] ?? 0);
       if (employeeSchedule.total_hours > contract + 1e-6) {
         warnings.push(`${employeeName}: contrat depasse (${employeeSchedule.total_hours.toFixed(1)}h > ${contract.toFixed(1)}h).`);
+      }
+    }
+
+    for (const [employeeName, employeeSchedule] of Object.entries(editedPlanning)) {
+      for (const day of dayKeys) {
+        const ranges = employeeSchedule.days[day]?.ranges ?? [];
+        const orderedRanges = [...ranges].sort(
+          (a, b) => hhmmToMinutes(a.start) - hhmmToMinutes(b.start),
+        );
+        for (let i = 0; i < orderedRanges.length - 1; i += 1) {
+          const currentEnd = hhmmToMinutes(orderedRanges[i].end);
+          const nextStart = hhmmToMinutes(orderedRanges[i + 1].start);
+          if (currentEnd > nextStart) {
+            warnings.push(`${employeeName}: chevauchement d'horaires sur ${day}.`);
+            break;
+          }
+        }
       }
     }
 
@@ -531,7 +609,7 @@ const SimulatorPanel = () => {
   }, [dayKeys, editedPlanning, employees, generatedPlanning, minStaff]);
 
   const recomputeTotalHours = (employeeSchedule: EmployeeSchedule): number => (
-    Object.values(employeeSchedule.days).reduce((sum, dayData) => sum + dayData.hours, 0)
+    recomputeEmployeeTotalHours(employeeSchedule)
   );
 
   const applyStatusToEditedPlanning = (
@@ -610,6 +688,7 @@ const SimulatorPanel = () => {
       };
 
       setError(null);
+      setSaveNotice(null);
       const response = await fetch(buildUrl("/generate-planning"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -635,9 +714,13 @@ const SimulatorPanel = () => {
       setEditedCellStatuses({});
       setIsManualEditMode(false);
       setInfeasibilityReasons([]);
+      setSaveNotice(null);
+      setLocalSaveState("idle");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(`Impossible de regenerer le planning avec les modifications manuelles: ${message}`);
+      setSaveNotice(null);
+      setLocalSaveState("idle");
     } finally {
       setLoadingGenerate(false);
     }
@@ -649,6 +732,8 @@ const SimulatorPanel = () => {
       return;
     }
     setError(null);
+    setSaveNotice(null);
+    setLocalSaveState("dirty");
     setEditedPlanning((prev) => applyStatusToEditedPlanning(prev, payload));
     setEditedCellStatuses((prev) => ({ ...prev, [`${payload.employee}__${payload.day}`]: payload.new_status }));
   };
@@ -659,6 +744,8 @@ const SimulatorPanel = () => {
     }
     setEditedPlanning((prev) => applyTimeToEditedPlanning(prev, payload));
     setEditedCellStatuses((prev) => ({ ...prev, [`${payload.employee}__${payload.day}`]: "working" }));
+    setSaveNotice(null);
+    setLocalSaveState("dirty");
   };
 
   const swapEmployeeDays = (payload: { employee: string; sourceDay: string; targetDay: string }) => {
@@ -670,6 +757,8 @@ const SimulatorPanel = () => {
     }
 
     setError(null);
+    setSaveNotice(null);
+    setLocalSaveState("dirty");
     setEditedPlanning((prev) => {
       if (!prev) return prev;
       const employeeSchedule = prev[payload.employee];
@@ -722,10 +811,28 @@ const SimulatorPanel = () => {
     });
   };
 
+  const saveLocalEdits = () => {
+    if (!editedPlanning) return;
+    const snapshot = JSON.parse(JSON.stringify(editedPlanning)) as Record<string, EmployeeSchedule>;
+    setGeneratedPlanning(snapshot);
+    setEditedPlanning(snapshot);
+    setEditedCellStatuses({});
+    setError(null);
+    setSaveNotice("Modifications enregistrees localement.");
+    setLocalSaveState("saved");
+    try {
+      localStorage.setItem(LOCAL_DRAFT_STORAGE_KEY, JSON.stringify(snapshot));
+    } catch {
+      // Ignore storage errors.
+    }
+  };
+
   const resetFromGeneratedPlanning = () => {
     setEditedPlanning(generatedPlanning);
     setEditedCellStatuses({});
     setError(null);
+    setSaveNotice(null);
+    setLocalSaveState("idle");
   };
 
   const loadDemoStore = async () => {
@@ -753,6 +860,8 @@ const SimulatorPanel = () => {
       };
 
       setError(null);
+      setSaveNotice(null);
+      setLocalSaveState("idle");
       const response = await fetch(buildUrl("/generate-planning"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -780,6 +889,8 @@ const SimulatorPanel = () => {
       setEditedCellStatuses({});
       setIsManualEditMode(false);
       setInfeasibilityReasons([]);
+      setSaveNotice(null);
+      setLocalSaveState("idle");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(message);
@@ -787,6 +898,8 @@ const SimulatorPanel = () => {
       setEditedPlanning(null);
       setEditedCellStatuses({});
       setInfeasibilityReasons([]);
+      setSaveNotice(null);
+      setLocalSaveState("idle");
     } finally {
       setLoadingGenerate(false);
     }
@@ -1050,6 +1163,16 @@ const SimulatorPanel = () => {
             <button
               type="button"
               className="button--ghost"
+              onClick={saveLocalEdits}
+              disabled={loadingGenerate || loading || !isManualEditMode || !editedPlanning}
+            >
+              Sauvegarder modifs locales
+            </button>
+          ) : null}
+          {generatedPlanning ? (
+            <button
+              type="button"
+              className="button--ghost"
               onClick={resetFromGeneratedPlanning}
               disabled={loadingGenerate || loading}
             >
@@ -1066,6 +1189,7 @@ const SimulatorPanel = () => {
       </div>
 
       {error ? <p className="alert alert--error">{error}</p> : null}
+      {saveNotice ? <p className="alert alert--warning">{saveNotice}</p> : null}
       {infeasibilityReasons.length > 0 ? (
         <div className="card">
           <h4>Diagnostic infeasibility</h4>
@@ -1097,7 +1221,10 @@ const SimulatorPanel = () => {
 
       <div className="decision-section">
         <h3>KPI</h3>
-        <KpiPanel kpiSummary={kpi} />
+        {isManualEditMode ? (
+          <p className="hint-text">KPI recalcules en direct sur le planning edite (local).</p>
+        ) : null}
+        <KpiPanel kpiSummary={displayedKpi} />
         {hasKpiSummary && planningImpossible ? (
           <p className="alert alert--error">Sous-effectif detecte: les heures contractuelles sont insuffisantes.</p>
         ) : null}
@@ -1118,6 +1245,16 @@ const SimulatorPanel = () => {
 
       <div className="decision-section">
         <h3>Planning</h3>
+        {generatedPlanning ? (
+          <div className="card">
+            <p className="hint-text">
+              <strong>Etat edition:</strong> {editingSourceLabel} | {localModifiedCount} modif locale(s) | {localWarnings.length} alerte(s) active(s) | {localSaveLabel}
+            </p>
+            <p className="hint-text">
+              KPI en mode edition = indicateurs locaux/warnings, pas une validation solveur.
+            </p>
+          </div>
+        ) : null}
         {generatedPlanning ? (
           <p className={isManualEditMode ? "alert alert--warning" : "hint-text"}>
             {isManualEditMode
