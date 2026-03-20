@@ -186,7 +186,6 @@ const SimulatorPanel = () => {
   const hasKpiSummary = Object.keys(kpi).length > 0;
   const planningImpossibleFromSimulation = totalContractHours < totalRequiredHours;
   const surstaffingHoursFromSimulation = Math.max(0, totalContractHours - totalRequiredHours);
-  const canGeneratePlanning = hasKpiSummary && !planningImpossibleFromSimulation;
   const closedWeekdayIndices = useMemo(
     () =>
       DAYS.reduce<number[]>((acc, day, idx) => {
@@ -689,6 +688,8 @@ const SimulatorPanel = () => {
         throw new Error(data.error);
       }
       const nextPlanning = data.schedule ?? null;
+      setKpi((data.kpi as Record<string, unknown>) ?? {});
+      setExplanation((data.explanation as SimulateResponse["explanation"]) ?? {});
       setGeneratedPlanning(nextPlanning);
       setEditedPlanning(nextPlanning);
       setEditedCellStatuses({});
@@ -864,6 +865,8 @@ const SimulatorPanel = () => {
         throw new Error(data.error);
       }
       const nextPlanning = data.schedule ?? null;
+      setKpi((data.kpi as Record<string, unknown>) ?? {});
+      setExplanation((data.explanation as SimulateResponse["explanation"]) ?? {});
       setGeneratedPlanning(nextPlanning);
       setEditedPlanning(nextPlanning);
       setEditedCellStatuses({});
@@ -1110,25 +1113,20 @@ const SimulatorPanel = () => {
       <div className="panel-section">
         <div className="panel-section__title">
           <span>4</span>
-          <h3>Simulation et generation</h3>
+          <h3>Generation</h3>
         </div>
         <div className="panel__actions">
-          <button type="button" className="button--primary" onClick={simulatePlanning} disabled={loading || loadingGenerate}>
-            {loading ? "Simulation..." : "Simuler"}
-          </button>
           <button type="button" onClick={resetScenario} disabled={loading || loadingGenerate}>
             Reinitialiser
           </button>
-          {hasKpiSummary ? (
-            <button
-              type="button"
-              className="button--primary-alt"
-              onClick={generatePlanning}
-              disabled={loadingGenerate || loading || !canGeneratePlanning}
-            >
-              {loadingGenerate ? "Generation..." : "Generer"}
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className="button--primary-alt"
+            onClick={generatePlanning}
+            disabled={loadingGenerate || loading}
+          >
+            {loadingGenerate ? "Generation..." : "Generer le planning"}
+          </button>
           {canEditLocally ? (
             <button
               type="button"
@@ -1168,9 +1166,6 @@ const SimulatorPanel = () => {
             Load demo store
           </button>
         </div>
-        {!hasKpiSummary ? (
-          <p className="hint-text">Lancez d'abord une simulation pour activer la generation finale.</p>
-        ) : null}
       </div>
       {hasKpiSummary ? (
         <div className="card">
