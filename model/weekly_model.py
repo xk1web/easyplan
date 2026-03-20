@@ -233,8 +233,6 @@ def build_weekly_model(
     for emp_name, contract in zip(employees, contracts):
         if contract < 0:
             raise ValueError(f"Contrat negatif interdit pour {emp_name}: {contract}h")
-        if contract > 35:
-            raise ValueError(f"Contrat > 35h non autorise en V1 pour {emp_name}: {contract}h")
 
     schedule = config.get("schedule", config)
     hard = config.get("hard_constraints", {})
