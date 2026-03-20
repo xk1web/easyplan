@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.explanation.planning_explainer import explain_planning
+from core.feasibility_precheck import run_employee_feasibility_precheck
 from core.infeasibility_diagnosis import diagnose_infeasibility
 from core.metrics.kpi_calculator import calculate_kpi
 from metrics.v1_kpi import compute_v1_kpi
@@ -124,6 +125,54 @@ def run_weekly_v1_engine(
         constraints=constraints,
     )
 
+    precheck = run_employee_feasibility_precheck(
+        employees=employees,
+        contracts=contracts,
+        days=days,
+        config=config,
+        constraints=constraints,
+        unavailabilities=unavailabilities,
+    )
+    if not precheck["is_feasible"]:
+        metrics = {
+            "num_variables": 0,
+            "num_constraints": 0,
+            "solver_wall_time": 0.0,
+            "solver_status": "INFEASIBLE",
+            "num_branches": 0,
+            "num_conflicts": 0,
+            "min_shift_length": 0.0,
+            "avg_shift_length": 0.0,
+        }
+        result = {
+            "status": "infeasible",
+            "solver_time": 0.0,
+            "solve_time_seconds": 0.0,
+            "metrics": metrics,
+            "kpi": {},
+            "hours_per_employee": {name: 0.0 for name in employees},
+            "solver_result": {"status": "infeasible", "wall_time": 0.0, "num_branches": 0, "num_conflicts": 0},
+            "schedule": None,
+            "coverage_slots_per_day": {},
+            "traceability": {"x": {}},
+            "error": "Contrat mathematiquement inatteignable pour au moins un salarie.",
+            "infeasibility_reasons": [
+                {
+                    "code": "EMPLOYEE_CONTRACT_UNREACHABLE",
+                    "title": "Contrat inatteignable par disponibilites",
+                    "message": (
+                        "Le volume contractuel ne peut pas etre atteint compte tenu des jours ouverts/fermes, "
+                        "des indisponibilites et de l'amplitude journaliere maximale."
+                    ),
+                    "details": precheck,
+                }
+            ],
+            "feasibility_precheck": precheck,
+        }
+        result["explanation"] = explain_planning(result, [])
+        result["kpi_summary"] = calculate_kpi(result)
+        return result
+
     solver_cfg = config.get("solver", {})
     max_time_seconds = int(config.get("solver_max_time_seconds", solver_cfg.get("max_time_seconds", 30)))
     num_workers = int(config.get("solver_num_workers", solver_cfg.get("num_search_workers", 8)))
@@ -159,6 +208,7 @@ def run_weekly_v1_engine(
         "kpi": kpi,
         "hours_per_employee": solve_output.hours_per_employee,
         "solver_result": solve_output.solver_result,
+        "feasibility_precheck": precheck,
     }
     result["explanation"] = explain_planning(result, explanation_employees, constraints=constraints)
 

@@ -64,6 +64,38 @@ def _resolve_closed_day_indices(config: dict, num_days: int) -> List[int]:
     return closed
 
 
+def _compute_max_no_opening_gap_minutes(
+    *,
+    num_days: int,
+    closed_days: List[int],
+    start_time_minutes: int,
+    end_time_minutes: int,
+) -> int:
+    week_minutes = num_days * 24 * 60
+    intervals: List[Tuple[int, int]] = []
+    closed_set = set(closed_days)
+    for d in range(num_days):
+        if d in closed_set:
+            continue
+        day_offset = d * 24 * 60
+        intervals.append((day_offset + start_time_minutes, day_offset + end_time_minutes))
+
+    if not intervals:
+        return week_minutes
+
+    intervals.sort()
+    max_gap = intervals[0][0]
+    prev_end = intervals[0][1]
+    for start, end in intervals[1:]:
+        if start > prev_end:
+            max_gap = max(max_gap, start - prev_end)
+            prev_end = end
+        else:
+            prev_end = max(prev_end, end)
+    max_gap = max(max_gap, week_minutes - prev_end)
+    return max_gap
+
+
 def _add_rest_11h_constraints(
     model: cp_model.CpModel,
     x: Dict[Tuple[int, int, int], cp_model.IntVar],
@@ -238,6 +270,12 @@ def build_weekly_model(
     max_day_slots = (600 + slot_minutes - 1) // slot_minutes
 
     closed_days = _resolve_closed_day_indices(config, num_days)
+    max_no_opening_gap_minutes = _compute_max_no_opening_gap_minutes(
+        num_days=num_days,
+        closed_days=closed_days,
+        start_time_minutes=start_time_minutes,
+        end_time_minutes=end_time_minutes,
+    )
     min_staff_per_day = _resolve_min_staff_per_day(schedule, num_days, closed_days)
 
     optician_indices = [idx for idx, role in enumerate(roles) if role == "opticien"]
@@ -555,16 +593,19 @@ def build_weekly_model(
         slot_minutes=slot_minutes,
         rest_minutes=rest_between_days_minutes,
     )
-    _add_weekly_rest_35h_constraints(
-        model=model,
-        x=x,
-        num_employees=num_employees,
-        num_days=num_days,
-        num_slots=num_slots,
-        start_time_minutes=start_time_minutes,
-        slot_minutes=slot_minutes,
-        rest_minutes=weekly_rest_minutes,
-    )
+    # Si la fermeture magasin suffit deja a garantir une fenetre continue de repos
+    # pour tous les salaries, ne pas rajouter une contrainte redondante employee-level.
+    if max_no_opening_gap_minutes < weekly_rest_minutes:
+        _add_weekly_rest_35h_constraints(
+            model=model,
+            x=x,
+            num_employees=num_employees,
+            num_days=num_days,
+            num_slots=num_slots,
+            start_time_minutes=start_time_minutes,
+            slot_minutes=slot_minutes,
+            rest_minutes=weekly_rest_minutes,
+        )
 
     model.Minimize(sum(soft_penalties) if soft_penalties else 0)
 
