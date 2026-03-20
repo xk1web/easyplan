@@ -134,6 +134,17 @@ def run_weekly_v1_engine(
         unavailabilities=unavailabilities,
     )
     if not precheck["is_feasible"]:
+        unreachable = precheck.get("unreachable_contracts") or []
+        unreachable_messages = [
+            str(item.get("summary_message"))
+            for item in unreachable
+            if isinstance(item, dict) and item.get("summary_message")
+        ]
+        manager_error = (
+            " | ".join(unreachable_messages[:2])
+            if unreachable_messages
+            else "Contrat mathematiquement inatteignable pour au moins un salarie."
+        )
         metrics = {
             "num_variables": 0,
             "num_constraints": 0,
@@ -155,14 +166,14 @@ def run_weekly_v1_engine(
             "schedule": None,
             "coverage_slots_per_day": {},
             "traceability": {"x": {}},
-            "error": "Contrat mathematiquement inatteignable pour au moins un salarie.",
+            "error": manager_error,
             "infeasibility_reasons": [
                 {
                     "code": "EMPLOYEE_CONTRACT_UNREACHABLE",
                     "title": "Contrat inatteignable par disponibilites",
                     "message": (
-                        "Le volume contractuel ne peut pas etre atteint compte tenu des jours ouverts/fermes, "
-                        "des indisponibilites et de l'amplitude journaliere maximale."
+                        "Le volume contractuel ne peut pas etre atteint pour un ou plusieurs salaries. "
+                        "Voir le detail par salarie ci-dessous."
                     ),
                     "details": precheck,
                 }
@@ -176,11 +187,13 @@ def run_weekly_v1_engine(
     solver_cfg = config.get("solver", {})
     max_time_seconds = int(config.get("solver_max_time_seconds", solver_cfg.get("max_time_seconds", 30)))
     num_workers = int(config.get("solver_num_workers", solver_cfg.get("num_search_workers", 8)))
+    random_seed = int(config.get("solver_random_seed", solver_cfg.get("random_seed", 42)))
 
     solve_output = solve_weekly_model(
         artifacts,
         max_time_seconds=max_time_seconds,
         num_workers=num_workers,
+        random_seed=random_seed,
     )
 
     kpi = compute_v1_kpi(artifacts, solve_output.x_values)

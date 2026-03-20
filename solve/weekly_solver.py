@@ -50,6 +50,7 @@ def solve_weekly_model(
     *,
     max_time_seconds: int,
     num_workers: int,
+    random_seed: int = 42,
 ) -> WeeklySolveOutput:
     print("INPUT DEBUG")
     print("employees received:", len(artifacts.employees))
@@ -67,7 +68,7 @@ def solve_weekly_model(
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = max_time_seconds
     solver.parameters.num_search_workers = max(1, num_workers)
-    solver.parameters.random_seed = 42
+    solver.parameters.random_seed = max(0, int(random_seed))
 
     # Structural observability of the solved CP-SAT model.
     try:

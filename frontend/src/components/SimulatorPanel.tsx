@@ -146,6 +146,11 @@ const effectiveWorkedHoursFromRanges = (ranges: TimeRange[]): number => {
   return Math.max(0, effectiveMinutes / 60);
 };
 
+const minutesToHoursLabel = (minutes: number): string => {
+  const hours = minutes / 60;
+  return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(1)}h`;
+};
+
 const recomputeEmployeeTotalHours = (employeeSchedule: EmployeeSchedule): number => (
   Object.values(employeeSchedule.days).reduce((sum, dayData) => {
     if (!dayData?.ranges?.length) return sum;
@@ -247,6 +252,30 @@ const SimulatorPanel = () => {
         return `${employee}: contrat=${(contractMinutes / 60).toFixed(1)}h, max possible=${(maxPossibleMinutes / 60).toFixed(1)}h`;
       });
     }
+    if (reason.code === "EMPLOYEE_CONTRACT_UNREACHABLE") {
+      const rows = Array.isArray(details.unreachable_contracts) ? details.unreachable_contracts : [];
+      return rows.slice(0, 5).map((row) => {
+        const item = row as Record<string, unknown>;
+        const summaryMessage = String(item.summary_message ?? "");
+        if (summaryMessage) {
+          return summaryMessage;
+        }
+        const employee = String(item.employee ?? "");
+        const contractMinutes = Number(item.contract_minutes ?? 0);
+        const maxPossibleMinutes = Number(item.max_possible_effective_minutes ?? 0);
+        const blockingDay = String(item.blocking_day ?? "");
+        const causes = Array.isArray(item.causes) ? item.causes.map((cause) => String(cause)) : [];
+        const causeLabels = causes.map((cause) => {
+          if (cause === "jours_ouverts_fermes") return "jours ouverts/fermes";
+          if (cause === "indisponibilite") return "indisponibilite";
+          if (cause === "amplitude_journaliere_maximale") return "amplitude journaliere max";
+          return cause;
+        });
+        const causeText = causeLabels.length > 0 ? causeLabels.join(", ") : "contraintes hard";
+        const dayText = blockingDay ? ` | jour bloquant: ${DAY_LABELS[blockingDay] ?? blockingDay}` : "";
+        return `${employee}: contrat=${minutesToHoursLabel(contractMinutes)}, max atteignable=${minutesToHoursLabel(maxPossibleMinutes)} | cause: ${causeText}${dayText}`;
+      });
+    }
     return [];
   };
 
@@ -264,6 +293,9 @@ const SimulatorPanel = () => {
     }
     if (codes.has("INSUFFICIENT_CAPACITY")) {
       hints.push("Augmenter la capacite contractuelle ou reduire les indisponibilites bloquantes.");
+    }
+    if (codes.has("EMPLOYEE_CONTRACT_UNREACHABLE")) {
+      hints.push("Verifier par salarie le contrat cible, les jours d'ouverture et les indisponibilites bloquees.");
     }
     if (hints.length === 0 && infeasibilityReasons.length > 0) {
       hints.push("Verifier les contraintes manager puis relancer une simulation.");
@@ -649,9 +681,13 @@ const SimulatorPanel = () => {
     };
   };
 
-  const generatePlanning = async () => {
+  const generatePlanning = async (options?: { randomize?: boolean }) => {
+    const randomize = Boolean(options?.randomize);
     setLoadingGenerate(true);
     try {
+      const solverRandomSeed = randomize
+        ? Math.floor(Math.random() * 1_000_000_000) + 1
+        : 42;
       const payload = {
         employees: employees.map((employee) => employee.name),
         contracts: employees.map((employee) => employee.contract),
@@ -666,6 +702,7 @@ const SimulatorPanel = () => {
             min_staff_per_slot: minStaff,
           },
           closed_weekdays: closedWeekdayIndices,
+          solver_random_seed: solverRandomSeed,
         },
       };
 
@@ -819,7 +856,7 @@ const SimulatorPanel = () => {
     setLocalSaveState("idle");
   };
 
-  const loadDemoStore = async () => {
+  const loadSampleScenario = async () => {
     setLoadingGenerate(true);
     try {
       const payload = {
@@ -1125,10 +1162,18 @@ const SimulatorPanel = () => {
           <button
             type="button"
             className="button--primary-alt"
-            onClick={generatePlanning}
+            onClick={() => generatePlanning()}
             disabled={loadingGenerate || loading}
           >
             {loadingGenerate ? "Generation..." : "Generer le planning"}
+          </button>
+          <button
+            type="button"
+            className="button--ghost"
+            onClick={() => generatePlanning({ randomize: true })}
+            disabled={loadingGenerate || loading}
+          >
+            Regenerer (variante)
           </button>
           {canEditLocally ? (
             <button
@@ -1165,8 +1210,8 @@ const SimulatorPanel = () => {
               Reinitialiser depuis planning genere
             </button>
           ) : null}
-          <button type="button" className="button--ghost" onClick={loadDemoStore} disabled={loadingGenerate || loading}>
-            Load demo store
+          <button type="button" className="button--ghost" onClick={loadSampleScenario} disabled={loadingGenerate || loading}>
+            Load sample scenario
           </button>
         </div>
       </div>
