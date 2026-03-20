@@ -46,13 +46,13 @@ const KpiPanel = ({ kpiSummary }: KpiPanelProps) => {
   const tensionRate = getNumber(kpiSummary, ["tension_rate", "taux_tension_percent"]);
   const coverageGap = Math.max(0, totalRequiredHours - totalPlannedHours);
   const fillRate = totalRequiredHours > 0 ? (totalPlannedHours / totalRequiredHours) * 100 : 0;
+  const netUndercoverage = Math.max(undercoverageHours, coverageGap);
+  const netSurstaffing = Math.max(0, surstaffingHours);
+  const primaryIndicatorLabel = netUndercoverage > 0 ? "Sous-couverture" : "Surstaffing";
+  const primaryIndicatorValue = netUndercoverage > 0 ? netUndercoverage : netSurstaffing;
 
   return (
     <div className="kpi-panel">
-      <div className="kpi-card">
-        <p>Heures contractuelles</p>
-        <strong>{totalContractHours.toFixed(1)}h</strong>
-      </div>
       <div className="kpi-card">
         <p>Heures requises</p>
         <strong>{totalRequiredHours.toFixed(1)}h</strong>
@@ -66,15 +66,12 @@ const KpiPanel = ({ kpiSummary }: KpiPanelProps) => {
         <strong>{fillRate.toFixed(1)}%</strong>
       </div>
       <div className="kpi-card">
-        <p>Sous-couverture</p>
-        <strong>{Math.max(undercoverageHours, coverageGap).toFixed(1)}h</strong>
-      </div>
-      <div className="kpi-card">
-        <p>Surstaffing</p>
-        <strong>{surstaffingHours.toFixed(1)}h</strong>
+        <p>{primaryIndicatorLabel}</p>
+        <strong>{primaryIndicatorValue.toFixed(1)}h</strong>
       </div>
       <div className="kpi-card kpi-card--wide">
-        <p>Tension</p>
+        <p>Lecture manager</p>
+        <span>Capacité contrat: {totalContractHours.toFixed(1)}h</span>
         <strong style={tensionStyle(tensionRate)}>{tensionRate.toFixed(2)}</strong>
         <span style={tensionStyle(tensionRate)}>{tensionDiagnostic(tensionRate)}</span>
       </div>

@@ -186,7 +186,6 @@ const SimulatorPanel = () => {
   const planningImpossibleFromSimulation = totalContractHours < totalRequiredHours;
   const surstaffingHoursFromSimulation = Math.max(0, totalContractHours - totalRequiredHours);
   const canGeneratePlanning = hasKpiSummary && !planningImpossibleFromSimulation;
-  const explanationConstraints = explanation?.constraints ?? [];
   const closedWeekdayIndices = useMemo(
     () =>
       DAYS.reduce<number[]>((acc, day, idx) => {
@@ -532,11 +531,6 @@ const SimulatorPanel = () => {
     () => Object.keys(modifiedCells).length,
     [modifiedCells],
   );
-  const editingSourceLabel = !generatedPlanning
-    ? "Aucun planning genere"
-    : localModifiedCount > 0
-      ? "Planning modifie localement"
-      : "Planning genere (inchangé)";
   const localSaveLabel = localSaveState === "saved"
     ? "Sauvegarde locale: OK"
     : localSaveState === "dirty"
@@ -608,6 +602,37 @@ const SimulatorPanel = () => {
 
     return warnings;
   }, [dayKeys, editedPlanning, employees, generatedPlanning, minStaff]);
+  const localImpactMessage = useMemo(() => {
+    if (!isManualEditMode || !generatedPlanning || !editedPlanning) return null;
+
+    const generatedHours = Object.values(generatedPlanning).reduce(
+      (sum, employeeSchedule) => sum + recomputeEmployeeTotalHours(employeeSchedule),
+      0,
+    );
+    const editedHours = Object.values(editedPlanning).reduce(
+      (sum, employeeSchedule) => sum + recomputeEmployeeTotalHours(employeeSchedule),
+      0,
+    );
+    const deltaHours = editedHours - generatedHours;
+    const deltaLabel = deltaHours > 0 ? `+${deltaHours.toFixed(1)}h` : `${deltaHours.toFixed(1)}h`;
+
+    if (Math.abs(deltaHours) < 1e-6 && localWarnings.length === 0) {
+      return "Impact de vos changements: rien de critique.";
+    }
+    if (Math.abs(deltaHours) < 1e-6) {
+      return `Impact de vos changements: heures stables, ${localWarnings.length} point(s) a verifier.`;
+    }
+    return `Impact de vos changements: ${deltaLabel} au planning, ${localWarnings.length} point(s) a verifier.`;
+  }, [editedPlanning, generatedPlanning, isManualEditMode, localWarnings.length]);
+  const activeAlertCount = infeasibilityReasons.length > 0 ? infeasibilityReasons.length : localWarnings.length;
+  const managerStatusLabel = infeasibilityReasons.length > 0
+    ? "Infeasible"
+    : planningImpossible
+      ? "Sous-effectif"
+      : surstaffingHours > 0
+        ? "Surstaffing"
+        : "Stable";
+  const kpiSourceLabel = isManualEditMode ? "KPI locaux (édition)" : "KPI solveur";
 
   const recomputeTotalHours = (employeeSchedule: EmployeeSchedule): number => (
     recomputeEmployeeTotalHours(employeeSchedule)
@@ -1193,13 +1218,20 @@ const SimulatorPanel = () => {
           <p className="hint-text">Lancez d'abord une simulation pour activer la generation finale.</p>
         ) : null}
       </div>
+      {hasKpiSummary ? (
+        <div className="card">
+          <p className="hint-text">
+            <strong>Résumé manager:</strong> Statut {managerStatusLabel} | {kpiSourceLabel} | {localModifiedCount} modif locale(s) | {activeAlertCount} alerte(s) | {localSaveLabel}
+          </p>
+          {localImpactMessage ? <p className="hint-text">{localImpactMessage}</p> : null}
+          {saveNotice ? <p className="hint-text">{saveNotice}</p> : null}
+        </div>
+      ) : null}
 
       {error ? <p className="alert alert--error">{error}</p> : null}
-      {saveNotice ? <p className="alert alert--warning">{saveNotice}</p> : null}
       {infeasibilityReasons.length > 0 ? (
         <div className="card">
           <h4>Diagnostic infeasibility</h4>
-          <p className="hint-text">Contexte conserve: vos parametres et contraintes restent en place pour correction rapide.</p>
           <ul className="list-clean">
             {infeasibilityReasons.map((reason, index) => (
               <li key={`${reason.code}-${index}`}>
@@ -1227,40 +1259,11 @@ const SimulatorPanel = () => {
 
       <div className="decision-section">
         <h3>KPI</h3>
-        {isManualEditMode ? (
-          <p className="hint-text">KPI recalcules en direct sur le planning edite (local).</p>
-        ) : null}
         <KpiPanel kpiSummary={displayedKpi} />
-        {hasKpiSummary && planningImpossible ? (
-          <p className="alert alert--error">Sous-effectif detecte: les heures contractuelles sont insuffisantes.</p>
-        ) : null}
-        {hasKpiSummary && surstaffingHours > 0 ? (
-          <p className="alert alert--warning">Surstaffing estime: {surstaffingHours.toFixed(2)} heures</p>
-        ) : null}
-        {explanationConstraints.length > 0 ? (
-          <>
-            <h4>Contraintes prises en compte</h4>
-            <ul className="list-clean">
-              {explanationConstraints.map((constraint, index) => (
-                <li key={`constraint-${index}`}>{constraint}</li>
-              ))}
-            </ul>
-          </>
-        ) : null}
       </div>
 
       <div className="decision-section">
         <h3>Planning</h3>
-        {generatedPlanning ? (
-          <div className="card">
-            <p className="hint-text">
-              <strong>Etat edition:</strong> {editingSourceLabel} | {localModifiedCount} modif locale(s) | {localWarnings.length} alerte(s) active(s) | {localSaveLabel}
-            </p>
-            <p className="hint-text">
-              KPI en mode edition = indicateurs locaux/warnings, pas une validation solveur.
-            </p>
-          </div>
-        ) : null}
         {generatedPlanning ? (
           <p className={isManualEditMode ? "alert alert--warning" : "hint-text"}>
             {isManualEditMode
@@ -1268,13 +1271,10 @@ const SimulatorPanel = () => {
               : "Passez en mode edition pour modifier OFF/WORKING et horaires."}
           </p>
         ) : null}
-        {isManualEditMode ? (
-          <p className="hint-text">Mode edition: glissez une case vers un autre jour (meme employe) pour inverser les deux jours.</p>
-        ) : null}
         {localWarnings.length > 0 ? (
           <div className="card">
             <p className="alert alert--warning">
-              Warnings locaux ({localWarnings.length}) : certaines modifications ne respectent pas les regles metier.
+              Alertes actives ({localWarnings.length})
             </p>
             <ul className="list-clean">
               {localWarnings.map((warning, index) => (
@@ -1292,11 +1292,6 @@ const SimulatorPanel = () => {
           onCellTimeChange={adjustPlanningTime}
           onSwapDays={swapEmployeeDays}
         />
-      </div>
-
-      <div className="decision-section">
-        <h3>Explication</h3>
-        <p>{explanation?.global_analysis?.message ?? "Aucun message."}</p>
       </div>
     </section>
   );
