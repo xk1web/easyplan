@@ -450,6 +450,7 @@ const SimulatorPanel = () => {
   };
 
   const activePlanning = editedPlanning ?? generatedPlanning ?? schedule;
+  const canEditLocally = Boolean(generatedPlanning || editedPlanning);
   const openingDurationHours = Math.max(0, (hhmmToMinutes(openingClose) - hhmmToMinutes(openingOpen)) / 60);
   const localKpiSummary = useMemo(() => {
     if (!activePlanning || Object.keys(activePlanning).length === 0) return null;
@@ -727,7 +728,7 @@ const SimulatorPanel = () => {
   };
 
   const adjustPlanningCell = (payload: { employee: string; day: string; new_status: "working" | "off" | "unavailable" }) => {
-    if (!isManualEditMode || !generatedPlanning || !editedPlanning) {
+    if (!isManualEditMode || !editedPlanning) {
       setError("Generez un planning avant de le modifier.");
       return;
     }
@@ -739,7 +740,7 @@ const SimulatorPanel = () => {
   };
 
   const adjustPlanningTime = (payload: { employee: string; day: string; start: string; end: string }) => {
-    if (!isManualEditMode || !generatedPlanning || !editedPlanning) {
+    if (!isManualEditMode || !editedPlanning) {
       return;
     }
     setEditedPlanning((prev) => applyTimeToEditedPlanning(prev, payload));
@@ -749,7 +750,7 @@ const SimulatorPanel = () => {
   };
 
   const swapEmployeeDays = (payload: { employee: string; sourceDay: string; targetDay: string }) => {
-    if (!isManualEditMode || !generatedPlanning || !editedPlanning) {
+    if (!isManualEditMode || !editedPlanning) {
       return;
     }
     if (payload.sourceDay === payload.targetDay) {
@@ -1149,11 +1150,16 @@ const SimulatorPanel = () => {
               {loadingGenerate ? "Generation..." : "Generer"}
             </button>
           ) : null}
-          {generatedPlanning ? (
+          {canEditLocally ? (
             <button
               type="button"
               className="button--ghost"
-              onClick={() => setIsManualEditMode((prev) => !prev)}
+              onClick={() => {
+                if (!editedPlanning && generatedPlanning) {
+                  setEditedPlanning(generatedPlanning);
+                }
+                setIsManualEditMode((prev) => !prev);
+              }}
               disabled={loadingGenerate || loading}
             >
               {isManualEditMode ? "Quitter mode edition" : "Mode edition"}
