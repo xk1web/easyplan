@@ -467,6 +467,11 @@ label {
   box-shadow: inset 0 0 0 1px #f2c94c;
 }
 
+.planning-cell--problem {
+  background: #fde9e8 !important;
+  box-shadow: inset 0 0 0 1px #e58f86;
+}
+
 .working {
   background-color: #fff7cc;
 }

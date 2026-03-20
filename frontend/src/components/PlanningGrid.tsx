@@ -34,6 +34,7 @@ type PlanningGridProps = {
   }) => void;
   cellStatuses?: Record<string, "working" | "off" | "unavailable">;
   modifiedCells?: Record<string, boolean>;
+  problematicCells?: Record<string, boolean>;
 };
 
 const DAY_LABELS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"] as const;
@@ -68,6 +69,7 @@ const PlanningGrid = ({
   onCellTimeChange,
   cellStatuses,
   modifiedCells,
+  problematicCells,
 }: PlanningGridProps) => {
   if (!schedule || Object.keys(schedule).length === 0) {
     return <p className="empty-state">Aucun planning disponible pour le moment.</p>;
@@ -105,11 +107,17 @@ const PlanningGrid = ({
                       ? dayData!.ranges.map((range) => `${range.start}-${range.end}`).join(", ")
                       : "WORKING (manuel)";
                 const isModified = Boolean(modifiedCells?.[key]);
+                const isProblematic = Boolean(problematicCells?.[key]);
+                const cellClassName = [
+                  "planning-cell",
+                  isModified ? "planning-cell--modified" : "",
+                  isProblematic ? "planning-cell--problem" : "",
+                ].filter(Boolean).join(" ");
 
                 return (
                   <td
                     key={`${employeeName}-${DAY_LABELS[index]}`}
-                    className={isModified ? "planning-cell planning-cell--modified" : "planning-cell"}
+                    className={cellClassName}
                     onDragOver={(event) => {
                       if (!editMode) return;
                       event.preventDefault();

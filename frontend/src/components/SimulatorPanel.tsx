@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import KpiPanel from "./KpiPanel";
 import PlanningGrid from "./PlanningGrid";
+import { analyzeManualPlanning } from "../utils/manualPlanningAnalysis";
 
 type EmployeeEntry = {
   name: string;
@@ -107,15 +108,6 @@ const DAY_LABELS: Record<string, string> = {
   saturday: "Samedi",
   sunday: "Dimanche",
 };
-const FRENCH_DAY_KEY_TO_WEEKDAY: Record<string, string> = {
-  lun: "monday",
-  mar: "tuesday",
-  mer: "wednesday",
-  jeu: "thursday",
-  ven: "friday",
-  sam: "saturday",
-  dim: "sunday",
-};
 const HIDDEN_BREAK_THRESHOLD_MINUTES = 6 * 60;
 const HIDDEN_BREAK_MINUTES = 60;
 const LOCAL_DRAFT_STORAGE_KEY = "easyplan_manual_draft_v1";
@@ -160,27 +152,6 @@ const recomputeEmployeeTotalHours = (employeeSchedule: EmployeeSchedule): number
     return sum + effectiveWorkedHoursFromRanges(dayData.ranges);
   }, 0)
 );
-
-const resolveWeekdayFromDayKey = (dayKey: string): string | null => {
-  const normalized = String(dayKey).trim().toLowerCase();
-  if (DAYS.includes(normalized)) {
-    return normalized;
-  }
-  const generic = normalized.match(/^j(\d)$/);
-  if (generic) {
-    const idx = Number(generic[1]);
-    return DAYS[idx] ?? null;
-  }
-  return FRENCH_DAY_KEY_TO_WEEKDAY[normalized] ?? null;
-};
-
-const displayDayLabel = (dayKey: string): string => {
-  const weekday = resolveWeekdayFromDayKey(dayKey);
-  if (weekday) {
-    return DAY_LABELS[weekday] ?? weekday;
-  }
-  return String(dayKey);
-};
 
 const SimulatorPanel = () => {
   const [employees, setEmployees] = useState<EmployeeEntry[]>(INITIAL_EMPLOYEES);
@@ -567,75 +538,24 @@ const SimulatorPanel = () => {
       ? "Sauvegarde locale: en attente"
       : "Sauvegarde locale: non demarree";
 
-  const localWarnings = useMemo(() => {
-    if (!generatedPlanning || !editedPlanning) return [] as string[];
-    const warnings: string[] = [];
-    const contractByEmployee = Object.fromEntries(employees.map((employee) => [employee.name, employee.contract]));
-    const roleByEmployee = Object.fromEntries(employees.map((employee) => [employee.name, employee.role]));
-
-    for (const [employeeName, employeeSchedule] of Object.entries(editedPlanning)) {
-      const contract = Number(contractByEmployee[employeeName] ?? 0);
-      if (employeeSchedule.total_hours > contract + 1e-6) {
-        warnings.push(`${employeeName}: contrat depasse (${employeeSchedule.total_hours.toFixed(1)}h > ${contract.toFixed(1)}h).`);
-      }
-    }
-
-    for (const [employeeName, employeeSchedule] of Object.entries(editedPlanning)) {
-      for (const day of dayKeys) {
-        const ranges = employeeSchedule.days[day]?.ranges ?? [];
-        const orderedRanges = [...ranges].sort(
-          (a, b) => hhmmToMinutes(a.start) - hhmmToMinutes(b.start),
-        );
-        for (let i = 0; i < orderedRanges.length - 1; i += 1) {
-          const currentEnd = hhmmToMinutes(orderedRanges[i].end);
-          const nextStart = hhmmToMinutes(orderedRanges[i + 1].start);
-          if (currentEnd > nextStart) {
-            warnings.push(`${employeeName}: chevauchement d'horaires sur ${day}.`);
-            break;
-          }
-        }
-      }
-    }
-
-    for (const [employeeName, employeeSchedule] of Object.entries(editedPlanning)) {
-      for (let i = 0; i < dayKeys.length - 1; i += 1) {
-        const currentDay = employeeSchedule.days[dayKeys[i]];
-        const nextDay = employeeSchedule.days[dayKeys[i + 1]];
-        if (!currentDay?.ranges?.length || !nextDay?.ranges?.length) continue;
-        const endCurrent = hhmmToMinutes(currentDay.ranges[currentDay.ranges.length - 1].end);
-        const startNext = hhmmToMinutes(nextDay.ranges[0].start);
-        const restMinutes = (24 * 60 - endCurrent) + startNext;
-        if (restMinutes < 11 * 60) {
-          warnings.push(`${employeeName}: repos < 11h entre ${dayKeys[i]} et ${dayKeys[i + 1]}.`);
-        }
-      }
-    }
-
-    for (const day of dayKeys) {
-      const weekday = resolveWeekdayFromDayKey(day);
-      if (weekday && !openingDays.includes(weekday)) {
-        continue
-      }
-      let workingCount = 0;
-      let opticianCount = 0;
-      for (const [employeeName, employeeSchedule] of Object.entries(editedPlanning)) {
-        const isWorking = Boolean(employeeSchedule.days[day]?.ranges?.length);
-        if (!isWorking) continue;
-        workingCount += 1;
-        if (roleByEmployee[employeeName] === "opticien") {
-          opticianCount += 1;
-        }
-      }
-      if (workingCount < minStaff) {
-        warnings.push(`${displayDayLabel(day)}: sous-couverture (${workingCount}/${minStaff}).`);
-      }
-      if (workingCount > 0 && opticianCount === 0) {
-        warnings.push(`${displayDayLabel(day)}: absence d'opticien diplome.`);
-      }
-    }
-
-    return warnings;
-  }, [dayKeys, editedPlanning, employees, generatedPlanning, minStaff]);
+  const manualAnalysis = useMemo(() => {
+    if (!isManualEditMode || !editedPlanning || dayKeys.length === 0) return null;
+    return analyzeManualPlanning({
+      schedule: editedPlanning,
+      employees,
+      dayKeys,
+      openingDays,
+      openingOpen,
+      openingClose,
+      minStaff,
+      dayLabels: DAY_LABELS,
+    });
+  }, [dayKeys, editedPlanning, employees, isManualEditMode, minStaff, openingClose, openingDays, openingOpen]);
+  const localWarnings = manualAnalysis?.allAlerts ?? [];
+  const localEmployeeAlerts = manualAnalysis?.employeeAlerts ?? [];
+  const localDayAlerts = manualAnalysis?.dayAlerts ?? [];
+  const localSummary = manualAnalysis?.summary ?? [];
+  const problematicCells = manualAnalysis?.problematicCells ?? {};
   const localImpactMessage = useMemo(() => {
     if (!isManualEditMode || !generatedPlanning || !editedPlanning) return null;
 
@@ -1305,7 +1225,37 @@ const SimulatorPanel = () => {
               : "Passez en mode edition pour modifier OFF/WORKING et horaires."}
           </p>
         ) : null}
-        {localWarnings.length > 0 ? (
+        {isManualEditMode && localSummary.length > 0 ? (
+          <div className="card">
+            <p className="alert alert--warning">Synthese locale</p>
+            <ul className="list-clean">
+              {localSummary.map((item, index) => (
+                <li key={`local-summary-${index}`}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {isManualEditMode && localEmployeeAlerts.length > 0 ? (
+          <div className="card">
+            <p className="alert alert--warning">Points critiques par employe</p>
+            <ul className="list-clean">
+              {localEmployeeAlerts.map((warning, index) => (
+                <li key={`local-employee-warning-${index}`}>{warning}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {isManualEditMode && localDayAlerts.length > 0 ? (
+          <div className="card">
+            <p className="alert alert--warning">Points critiques par jour</p>
+            <ul className="list-clean">
+              {localDayAlerts.map((warning, index) => (
+                <li key={`local-day-warning-${index}`}>{warning}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {isManualEditMode && localWarnings.length > 0 ? (
           <div className="card">
             <p className="alert alert--warning">
               Alertes actives ({localWarnings.length})
@@ -1322,6 +1272,7 @@ const SimulatorPanel = () => {
           editMode={isManualEditMode}
           cellStatuses={editedCellStatuses}
           modifiedCells={modifiedCells}
+          problematicCells={problematicCells}
           onCellStatusChange={adjustPlanningCell}
           onCellTimeChange={adjustPlanningTime}
           onSwapDays={swapEmployeeDays}
