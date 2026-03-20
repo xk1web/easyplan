@@ -107,6 +107,15 @@ const DAY_LABELS: Record<string, string> = {
   saturday: "Samedi",
   sunday: "Dimanche",
 };
+const FRENCH_DAY_KEY_TO_WEEKDAY: Record<string, string> = {
+  lun: "monday",
+  mar: "tuesday",
+  mer: "wednesday",
+  jeu: "thursday",
+  ven: "friday",
+  sam: "saturday",
+  dim: "sunday",
+};
 const HIDDEN_BREAK_THRESHOLD_MINUTES = 6 * 60;
 const HIDDEN_BREAK_MINUTES = 60;
 const LOCAL_DRAFT_STORAGE_KEY = "easyplan_manual_draft_v1";
@@ -151,6 +160,27 @@ const recomputeEmployeeTotalHours = (employeeSchedule: EmployeeSchedule): number
     return sum + effectiveWorkedHoursFromRanges(dayData.ranges);
   }, 0)
 );
+
+const resolveWeekdayFromDayKey = (dayKey: string): string | null => {
+  const normalized = String(dayKey).trim().toLowerCase();
+  if (DAYS.includes(normalized)) {
+    return normalized;
+  }
+  const generic = normalized.match(/^j(\d)$/);
+  if (generic) {
+    const idx = Number(generic[1]);
+    return DAYS[idx] ?? null;
+  }
+  return FRENCH_DAY_KEY_TO_WEEKDAY[normalized] ?? null;
+};
+
+const displayDayLabel = (dayKey: string): string => {
+  const weekday = resolveWeekdayFromDayKey(dayKey);
+  if (weekday) {
+    return DAY_LABELS[weekday] ?? weekday;
+  }
+  return String(dayKey);
+};
 
 const SimulatorPanel = () => {
   const [employees, setEmployees] = useState<EmployeeEntry[]>(INITIAL_EMPLOYEES);
@@ -582,6 +612,10 @@ const SimulatorPanel = () => {
     }
 
     for (const day of dayKeys) {
+      const weekday = resolveWeekdayFromDayKey(day);
+      if (weekday && !openingDays.includes(weekday)) {
+        continue
+      }
       let workingCount = 0;
       let opticianCount = 0;
       for (const [employeeName, employeeSchedule] of Object.entries(editedPlanning)) {
@@ -593,10 +627,10 @@ const SimulatorPanel = () => {
         }
       }
       if (workingCount < minStaff) {
-        warnings.push(`${day}: sous-couverture (${workingCount}/${minStaff}).`);
+        warnings.push(`${displayDayLabel(day)}: sous-couverture (${workingCount}/${minStaff}).`);
       }
       if (workingCount > 0 && opticianCount === 0) {
-        warnings.push(`${day}: absence d'opticien diplome.`);
+        warnings.push(`${displayDayLabel(day)}: absence d'opticien diplome.`);
       }
     }
 
