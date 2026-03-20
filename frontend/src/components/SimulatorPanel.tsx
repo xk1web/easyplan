@@ -550,11 +550,14 @@ const SimulatorPanel = () => {
       dayLabels: DAY_LABELS,
     });
   }, [dayKeys, editedPlanning, employees, isManualEditMode, minStaff, openingClose, openingDays, openingOpen]);
-  const localWarnings = manualAnalysis?.allAlerts ?? [];
   const localEmployeeAlerts = manualAnalysis?.employeeAlerts ?? [];
   const localDayAlerts = manualAnalysis?.dayAlerts ?? [];
   const localSummary = manualAnalysis?.summary ?? [];
   const problematicCells = manualAnalysis?.problematicCells ?? {};
+  const uniqueLocalAlerts = useMemo(
+    () => Array.from(new Set([...localDayAlerts, ...localEmployeeAlerts])),
+    [localDayAlerts, localEmployeeAlerts],
+  );
   const localImpactMessage = useMemo(() => {
     if (!isManualEditMode || !generatedPlanning || !editedPlanning) return null;
 
@@ -569,15 +572,15 @@ const SimulatorPanel = () => {
     const deltaHours = editedHours - generatedHours;
     const deltaLabel = deltaHours > 0 ? `+${deltaHours.toFixed(1)}h` : `${deltaHours.toFixed(1)}h`;
 
-    if (Math.abs(deltaHours) < 1e-6 && localWarnings.length === 0) {
+    if (Math.abs(deltaHours) < 1e-6 && uniqueLocalAlerts.length === 0) {
       return "Impact de vos changements: rien de critique.";
     }
     if (Math.abs(deltaHours) < 1e-6) {
-      return `Impact de vos changements: heures stables, ${localWarnings.length} point(s) a verifier.`;
+      return `Impact de vos changements: heures stables, ${uniqueLocalAlerts.length} point(s) a verifier.`;
     }
-    return `Impact de vos changements: ${deltaLabel} au planning, ${localWarnings.length} point(s) a verifier.`;
-  }, [editedPlanning, generatedPlanning, isManualEditMode, localWarnings.length]);
-  const activeAlertCount = infeasibilityReasons.length > 0 ? infeasibilityReasons.length : localWarnings.length;
+    return `Impact de vos changements: ${deltaLabel} au planning, ${uniqueLocalAlerts.length} point(s) a verifier.`;
+  }, [editedPlanning, generatedPlanning, isManualEditMode, uniqueLocalAlerts.length]);
+  const activeAlertCount = infeasibilityReasons.length > 0 ? infeasibilityReasons.length : uniqueLocalAlerts.length;
   const managerStatusLabel = infeasibilityReasons.length > 0
     ? "Infeasible"
     : planningImpossible
@@ -1220,46 +1223,39 @@ const SimulatorPanel = () => {
               : "Passez en mode edition pour modifier OFF/WORKING et horaires."}
           </p>
         ) : null}
-        {isManualEditMode && localSummary.length > 0 ? (
+        {isManualEditMode && (localSummary.length > 0 || uniqueLocalAlerts.length > 0) ? (
           <div className="card">
-            <p className="alert alert--warning">Synthese locale</p>
-            <ul className="list-clean">
-              {localSummary.map((item, index) => (
-                <li key={`local-summary-${index}`}>{item}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {isManualEditMode && localEmployeeAlerts.length > 0 ? (
-          <div className="card">
-            <p className="alert alert--warning">Points critiques par employe</p>
-            <ul className="list-clean">
-              {localEmployeeAlerts.map((warning, index) => (
-                <li key={`local-employee-warning-${index}`}>{warning}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {isManualEditMode && localDayAlerts.length > 0 ? (
-          <div className="card">
-            <p className="alert alert--warning">Points critiques par jour</p>
-            <ul className="list-clean">
-              {localDayAlerts.map((warning, index) => (
-                <li key={`local-day-warning-${index}`}>{warning}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {isManualEditMode && localWarnings.length > 0 ? (
-          <div className="card">
-            <p className="alert alert--warning">
-              Alertes actives ({localWarnings.length})
-            </p>
-            <ul className="list-clean">
-              {localWarnings.map((warning, index) => (
-                <li key={`local-warning-${index}`}>{warning}</li>
-              ))}
-            </ul>
+            <p className="alert alert--warning">Alertes locales ({uniqueLocalAlerts.length})</p>
+            {localSummary.length > 0 ? (
+              <>
+                <p className="hint-text"><strong>Synthese</strong></p>
+                <ul className="list-clean">
+                  {localSummary.map((item, index) => (
+                    <li key={`local-summary-${index}`}>{item}</li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+            {localDayAlerts.length > 0 ? (
+              <>
+                <p className="hint-text"><strong>Par jour</strong></p>
+                <ul className="list-clean">
+                  {localDayAlerts.map((warning, index) => (
+                    <li key={`local-day-warning-${index}`}>{warning}</li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+            {localEmployeeAlerts.length > 0 ? (
+              <>
+                <p className="hint-text"><strong>Par employe</strong></p>
+                <ul className="list-clean">
+                  {localEmployeeAlerts.map((warning, index) => (
+                    <li key={`local-employee-warning-${index}`}>{warning}</li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
           </div>
         ) : null}
         <PlanningGrid
