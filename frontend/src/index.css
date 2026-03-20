@@ -127,6 +127,27 @@ body::before {
   align-items: center;
 }
 
+.panel__actions--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.action-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.action-group button {
+  margin-top: 0;
+}
+
+.action-group--primary .button--primary-alt {
+  min-width: 210px;
+}
+
 select,
 button,
 input {
@@ -532,6 +553,15 @@ label {
   }
 
   .panel__actions button {
+    width: 100%;
+  }
+
+  .action-group {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .action-group button {
     width: 100%;
   }
 }

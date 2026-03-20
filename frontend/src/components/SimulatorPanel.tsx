@@ -856,78 +856,6 @@ const SimulatorPanel = () => {
     setLocalSaveState("idle");
   };
 
-  const loadSampleScenario = async () => {
-    setLoadingGenerate(true);
-    try {
-      const payload = {
-        employees: ["Alice", "Bob", "Chloe", "David"],
-        contracts: [35, 35, 28, 24],
-        roles: ["opticien", "opticien", "vendeur", "opticien"],
-        constraints: [
-          { type: "unavailability", employee: "Alice", day: "monday" },
-          { type: "prefer_morning", employee: "Bob", day: "wednesday" },
-          { type: "avoid_closing", employee: "David", day: "friday" },
-        ],
-        days: ["J0", "J1", "J2", "J3", "J4", "J5", "J6"],
-        unavailabilities: [],
-        config: {
-          schedule: {
-            start_time_minutes: 9 * 60,
-            end_time_minutes: 18 * 60,
-            min_staff_per_slot: 1,
-          },
-          closed_weekdays: [6],
-        },
-      };
-
-      setError(null);
-      setSaveNotice(null);
-      setLocalSaveState("idle");
-      const response = await fetch(buildUrl("/generate-planning"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) {
-        throw new Error(await parseErrorMessage(response));
-      }
-      const data = (await response.json()) as GeneratePlanningResponse;
-      if (data.status === "infeasible") {
-        setGeneratedPlanning(null);
-        setEditedPlanning(null);
-        setEditedCellStatuses({});
-        setIsManualEditMode(false);
-        setInfeasibilityReasons(data.infeasibility_reasons ?? []);
-        setError(data.error ?? "Planning infeasible avec les contraintes hard actuelles.");
-        return;
-      }
-      if (data.error) {
-        throw new Error(data.error);
-      }
-      const nextPlanning = data.schedule ?? null;
-      setKpi((data.kpi as Record<string, unknown>) ?? {});
-      setExplanation((data.explanation as SimulateResponse["explanation"]) ?? {});
-      setGeneratedPlanning(nextPlanning);
-      setEditedPlanning(nextPlanning);
-      setEditedCellStatuses({});
-      setIsManualEditMode(false);
-      setInfeasibilityReasons([]);
-      setSaveNotice(null);
-      setLocalSaveState("idle");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      setError(message);
-      setGeneratedPlanning(null);
-      setEditedPlanning(null);
-      setEditedCellStatuses({});
-      setInfeasibilityReasons([]);
-      setSaveNotice(null);
-      setLocalSaveState("idle");
-    } finally {
-      setLoadingGenerate(false);
-    }
-  };
-
   return (
     <section className="panel simulator">
       <div className="simulator__header">
@@ -1155,64 +1083,67 @@ const SimulatorPanel = () => {
           <span>4</span>
           <h3>Generation</h3>
         </div>
-        <div className="panel__actions">
-          <button type="button" onClick={resetScenario} disabled={loading || loadingGenerate}>
-            Reinitialiser
-          </button>
-          <button
-            type="button"
-            className="button--primary-alt"
-            onClick={() => generatePlanning()}
-            disabled={loadingGenerate || loading}
-          >
-            {loadingGenerate ? "Generation..." : "Generer le planning"}
-          </button>
-          <button
-            type="button"
-            className="button--ghost"
-            onClick={() => generatePlanning({ randomize: true })}
-            disabled={loadingGenerate || loading}
-          >
-            Regenerer (variante)
-          </button>
-          {canEditLocally ? (
+        <div className="panel__actions panel__actions--stacked">
+          <div className="action-group action-group--primary">
             <button
               type="button"
-              className="button--ghost"
-              onClick={() => {
-                if (!editedPlanning && generatedPlanning) {
-                  setEditedPlanning(generatedPlanning);
-                }
-                setIsManualEditMode((prev) => !prev);
-              }}
+              className="button--primary-alt"
+              onClick={() => generatePlanning()}
               disabled={loadingGenerate || loading}
             >
-              {isManualEditMode ? "Quitter mode edition" : "Mode edition"}
+              {loadingGenerate ? "Generation..." : "Generer le planning"}
             </button>
-          ) : null}
-          {generatedPlanning ? (
             <button
               type="button"
               className="button--ghost"
-              onClick={saveLocalEdits}
-              disabled={loadingGenerate || loading || !isManualEditMode || !editedPlanning}
-            >
-              Sauvegarder modifs locales
-            </button>
-          ) : null}
-          {generatedPlanning ? (
-            <button
-              type="button"
-              className="button--ghost"
-              onClick={resetFromGeneratedPlanning}
+              onClick={() => generatePlanning({ randomize: true })}
               disabled={loadingGenerate || loading}
             >
-              Reinitialiser depuis planning genere
+              Regenerer (variante)
             </button>
+            <button type="button" onClick={resetScenario} disabled={loading || loadingGenerate}>
+              Reinitialiser le scenario
+            </button>
+          </div>
+          {canEditLocally || generatedPlanning ? (
+            <div className="action-group action-group--secondary">
+              {canEditLocally ? (
+                <button
+                  type="button"
+                  className="button--ghost"
+                  onClick={() => {
+                    if (!editedPlanning && generatedPlanning) {
+                      setEditedPlanning(generatedPlanning);
+                    }
+                    setIsManualEditMode((prev) => !prev);
+                  }}
+                  disabled={loadingGenerate || loading}
+                >
+                  {isManualEditMode ? "Quitter mode edition" : "Mode edition"}
+                </button>
+              ) : null}
+              {generatedPlanning ? (
+                <button
+                  type="button"
+                  className="button--ghost"
+                  onClick={saveLocalEdits}
+                  disabled={loadingGenerate || loading || !isManualEditMode || !editedPlanning}
+                >
+                  Sauvegarder modifs locales
+                </button>
+              ) : null}
+              {generatedPlanning ? (
+                <button
+                  type="button"
+                  className="button--ghost"
+                  onClick={resetFromGeneratedPlanning}
+                  disabled={loadingGenerate || loading}
+                >
+                  Annuler modifs locales
+                </button>
+              ) : null}
+            </div>
           ) : null}
-          <button type="button" className="button--ghost" onClick={loadSampleScenario} disabled={loadingGenerate || loading}>
-            Load sample scenario
-          </button>
         </div>
       </div>
       {hasKpiSummary ? (
